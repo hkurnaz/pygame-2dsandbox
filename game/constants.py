@@ -7,8 +7,8 @@ FPS = 60
 
 # World settings
 TILE_SIZE = 32
-WORLD_WIDTH = 100  # tiles wide
-WORLD_HEIGHT = 50  # tiles tall
+WORLD_WIDTH = 400  # tiles wide (4x bigger)
+WORLD_HEIGHT = 200  # tiles tall (4x bigger)
 
 # Colors
 BLACK = (0, 0, 0)
@@ -31,14 +31,24 @@ WOOD_COLOR = (101, 67, 33)
 LEAVES_COLOR = (34, 139, 34)
 STONE_COLOR = (128, 128, 128)
 
-# Player settings (2 blocks wide, 3 blocks tall)
-PLAYER_WIDTH = 64   # 2 blocks
+# Tool colors
+SWORD_COLOR = (180, 180, 200)
+PICKAXE_COLOR = (100, 100, 120)
+AXE_COLOR = (139, 90, 43)
+SHOVEL_COLOR = (150, 150, 160)
+
+# Player settings (1.5 blocks wide, 3 blocks tall)
+PLAYER_WIDTH = 48   # 1.5 blocks
 PLAYER_HEIGHT = 96  # 3 blocks
 PLAYER_COLOR = (0, 100, 200)
 PLAYER_SPEED = 5
 PLAYER_JUMP_VELOCITY = -14
 GRAVITY = 0.6
 MAX_FALL_SPEED = 15
+
+# Thrown item settings
+THROW_FORCE = 8.0  # Initial throw velocity
+THROW_UPWARD_ANGLE = -0.3  # Slight upward angle
 
 # Breaking settings
 BREAK_RANGE = 5  # blocks
@@ -65,5 +75,26 @@ CAMERA_SMOOTH = 0.1
 # World generation
 GRASS_LAYER_DEPTH = 1
 DIRT_LAYER_DEPTH = 8
-TREE_CHANCE = 0.08  # 8% chance per column to have a tree
-MIN_TREE_SPACING = 4  # minimum tiles between trees
+TREE_CHANCE = 0.03  # 3% chance per column to have a tree (reduced count)
+MIN_TREE_SPACING = 10  # minimum tiles between trees (more spread out)
+
+# Day/Night cycle
+DAY_DURATION = 300.0  # 5 minutes in seconds
+NIGHT_SKY_COLOR = (25, 25, 50)  # Dark blue for night
+DAY_SKY_COLOR = (135, 206, 235)  # Sky blue for day
+
+# Sword settings
+SWORD_SWING_DURATION = 0.3  # seconds
+SWORD_SWING_RANGE = 80  # pixels
+SWORD_DAMAGE = 1  # damage per hit
+
+# Zombie settings
+ZOMBIE_WIDTH = 48
+ZOMBIE_HEIGHT = 72
+ZOMBIE_SPEED = 1.5
+ZOMBIE_HEALTH = 3
+ZOMBIE_DAMAGE = 1
+ZOMBIE_SPAWN_INTERVAL = 5.0  # seconds between spawn attempts
+ZOMBIE_MAX_COUNT = 10  # max zombies at once
+ZOMBIE_SPAWN_DISTANCE_MIN = 300  # minimum distance from player
+ZOMBIE_SPAWN_DISTANCE_MAX = 500  # maximum distance from player

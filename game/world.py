@@ -20,6 +20,8 @@ class World:
         # 2D grid: world[y][x] = block_type
         self.grid = [[BlockType.AIR for _ in range(self.width)] for _ in range(self.height)]
         self._generated = False
+        # Track open doors: set of (x, y) tuples for doors that are open
+        self.open_doors = set()
 
     def generate(self):
         """Generate the world: grass layer, dirt layer, and trees."""
@@ -68,16 +70,16 @@ class World:
         if ground_y is None:
             return
 
-        # Tree trunk (wood)
-        trunk_height = random.randint(4, 6)
+        # Tree trunk (wood) - very tall trees (12-18 blocks)
+        trunk_height = random.randint(12, 18)
         for ty in range(trunk_height):
             y = ground_y - 1 - ty
             if 0 <= y < self.height:
                 self.grid[y][x] = BlockType.WOOD
 
-        # Tree leaves (a simple canopy)
+        # Tree leaves (a larger canopy)
         canopy_y = ground_y - trunk_height - 1
-        canopy_size = 2
+        canopy_size = 3
         for dy in range(-canopy_size, canopy_size + 1):
             for dx in range(-canopy_size, canopy_size + 1):
                 # Make a rounded canopy
@@ -103,7 +105,70 @@ class World:
 
     def is_solid(self, x, y):
         """Check if block at (x, y) is solid."""
-        return is_block_solid(self.get_block(x, y))
+        block = self.get_block(x, y)
+        # Open doors are not solid
+        if block == BlockType.DOOR and (x, y) in self.open_doors:
+            return False
+        return is_block_solid(block)
+    
+    def toggle_door(self, x, y):
+        """Toggle a door open/closed. Toggles all 3 blocks of a door. Returns True if successful."""
+        if 0 <= x < self.width and 0 <= y < self.height:
+            if self.grid[y][x] == BlockType.DOOR:
+                # Find all door blocks in this column (up to 3)
+                door_positions = []
+                # Check current position
+                door_positions.append((x, y))
+                # Check above
+                for dy in range(1, 3):
+                    check_y = y - dy
+                    if 0 <= check_y < self.height and self.grid[check_y][x] == BlockType.DOOR:
+                        door_positions.append((x, check_y))
+                # Check below
+                for dy in range(1, 3):
+                    check_y = y + dy
+                    if 0 <= check_y < self.height and self.grid[check_y][x] == BlockType.DOOR:
+                        door_positions.append((x, check_y))
+                
+                # Toggle all door blocks
+                is_open = (x, y) in self.open_doors
+                for dx, dy in door_positions:
+                    if is_open:
+                        self.open_doors.discard((dx, dy))
+                    else:
+                        self.open_doors.add((dx, dy))
+                return True
+        return False
+    
+    def break_door(self, x, y):
+        """Break all blocks of a door. Returns list of (x, y) positions broken."""
+        if 0 <= x < self.width and 0 <= y < self.height:
+            if self.grid[y][x] == BlockType.DOOR:
+                # Find all door blocks in this column
+                door_positions = []
+                door_positions.append((x, y))
+                # Check above
+                for dy in range(1, 3):
+                    check_y = y - dy
+                    if 0 <= check_y < self.height and self.grid[check_y][x] == BlockType.DOOR:
+                        door_positions.append((x, check_y))
+                # Check below
+                for dy in range(1, 3):
+                    check_y = y + dy
+                    if 0 <= check_y < self.height and self.grid[check_y][x] == BlockType.DOOR:
+                        door_positions.append((x, check_y))
+                
+                # Remove all door blocks
+                for dx, dy in door_positions:
+                    self.grid[dy][dx] = BlockType.AIR
+                    self.open_doors.discard((dx, dy))
+                
+                return door_positions
+        return []
+    
+    def is_door_open(self, x, y):
+        """Check if a door at (x, y) is open."""
+        return (x, y) in self.open_doors
 
     def break_block(self, x, y):
         """Break (remove) a block at (x, y) if breakable."""
@@ -136,13 +201,55 @@ class World:
                 sx, sy = camera.world_to_screen(world_x, world_y)
                 scaled_size = TILE_SIZE * camera.zoom
 
-                # Draw block
+                # Draw block (no border to avoid micro gaps)
                 color = get_block_color(block_type)
-                rect = pygame.Rect(int(sx), int(sy), int(scaled_size), int(scaled_size))
-                pygame.draw.rect(surface, color, rect)
-
-                # Draw a subtle border for definition
-                pygame.draw.rect(surface, (0, 0, 0), rect, 1)
+                rect = pygame.Rect(int(sx), int(sy), int(scaled_size) + 1, int(scaled_size) + 1)
+                
+                # Special drawing for doors
+                if block_type == BlockType.DOOR:
+                    is_open = (x, y) in self.open_doors
+                    
+                    # Determine which part of the door this is
+                    # Check if there's a door block below (this is top or middle)
+                    has_door_below = (y + 1 < self.height and self.grid[y + 1][x] == BlockType.DOOR)
+                    # Check if there's a door block above (this is bottom or middle)
+                    has_door_above = (y - 1 >= 0 and self.grid[y - 1][x] == BlockType.DOOR)
+                    
+                    if is_open:
+                        # Draw open door - thin vertical strip
+                        pygame.draw.rect(surface, color, rect)
+                        # Draw opening (darker inner area)
+                        inner_rect = pygame.Rect(int(sx) + int(scaled_size * 0.7), int(sy), 
+                                                int(scaled_size * 0.3) + 1, int(scaled_size) + 1)
+                        pygame.draw.rect(surface, (60, 40, 20), inner_rect)
+                    else:
+                        # Draw closed door - only draw details on bottom block
+                        pygame.draw.rect(surface, color, rect)
+                        
+                        if not has_door_below:
+                            # This is the bottom of the door - draw handle and bottom panel
+                            panel_color = (100, 60, 30)
+                            panel_margin = int(scaled_size * 0.08)
+                            panel_rect = pygame.Rect(int(sx) + panel_margin, int(sy) + panel_margin,
+                                                    int(scaled_size) - panel_margin * 2 + 1, 
+                                                    int(scaled_size) - panel_margin * 2 + 1)
+                            pygame.draw.rect(surface, panel_color, panel_rect)
+                            
+                            # Draw handle
+                            handle_x = int(sx) + int(scaled_size * 0.75)
+                            handle_y = int(sy) + int(scaled_size * 0.5)
+                            handle_size = max(2, int(scaled_size * 0.08))
+                            pygame.draw.circle(surface, (200, 180, 50), (handle_x, handle_y), handle_size)
+                        else:
+                            # Middle or top - just draw wood grain
+                            panel_color = (100, 60, 30)
+                            panel_margin = int(scaled_size * 0.08)
+                            panel_rect = pygame.Rect(int(sx) + panel_margin, int(sy) + panel_margin,
+                                                    int(scaled_size) - panel_margin * 2 + 1, 
+                                                    int(scaled_size) - panel_margin * 2 + 1)
+                            pygame.draw.rect(surface, panel_color, panel_rect)
+                else:
+                    pygame.draw.rect(surface, color, rect)
 
     def get_player_spawn(self):
         """Find a spawn point for the player."""

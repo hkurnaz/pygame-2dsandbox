@@ -6,11 +6,11 @@ from game.constants import (
     PLAYER_SPEED, PLAYER_JUMP_VELOCITY, GRAVITY, MAX_FALL_SPEED,
     TILE_SIZE
 )
-from game.blocks import is_block_solid
+from game.blocks import is_block_solid, BlockType
 
 
 class Player:
-    """Player represented as a box with movement and jumping (2 blocks wide, 3 blocks tall)."""
+    """Player represented as a box with movement and jumping (1.5 blocks wide, 3 blocks tall)."""
 
     def __init__(self, x, y):
         self.x = float(x)
@@ -21,6 +21,7 @@ class Player:
         self.height = PLAYER_HEIGHT
         self.on_ground = False
         self.color = PLAYER_COLOR
+        self.facing_right = True  # Player facing direction
 
     @property
     def rect(self):
@@ -41,8 +42,10 @@ class Player:
 
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             self.vx = -PLAYER_SPEED
+            self.facing_right = False
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             self.vx = PLAYER_SPEED
+            self.facing_right = True
 
         # Jump
         if (keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w]) and self.on_ground:
@@ -75,6 +78,10 @@ class Player:
 
         for ty in range(top_tile, bottom_tile + 1):
             for tx in range(left_tile, right_tile + 1):
+                bt = world.get_block(tx, ty)
+                # Skip tree blocks (WOOD, LEAVES) - player can walk through
+                if bt in (BlockType.WOOD, BlockType.LEAVES):
+                    continue
                 if world.is_solid(tx, ty):
                     block_rect = pygame.Rect(
                         tx * TILE_SIZE,
@@ -105,6 +112,10 @@ class Player:
 
         for ty in range(top_tile, bottom_tile + 1):
             for tx in range(left_tile, right_tile + 1):
+                bt = world.get_block(tx, ty)
+                # Skip tree blocks (WOOD, LEAVES) - player can walk through
+                if bt in (BlockType.WOOD, BlockType.LEAVES):
+                    continue
                 if world.is_solid(tx, ty):
                     block_rect = pygame.Rect(
                         tx * TILE_SIZE,
@@ -125,30 +136,270 @@ class Player:
                         rect = self.rect
 
     def draw(self, surface, camera):
-        """Draw the player as a box."""
+        """Draw the player as a thinner, more human-like character."""
         screen_rect = camera.apply(self.rect)
-        pygame.draw.rect(surface, self.color, screen_rect)
-        # Draw a small highlight on top for detail (scaled with zoom)
-        highlight_height = max(4, int(10 * camera.zoom))
-        highlight = pygame.Rect(screen_rect.x, screen_rect.y, screen_rect.width, highlight_height)
-        pygame.draw.rect(surface, (100, 150, 255), highlight)
-        # Draw face area (scaled with zoom)
-        face_margin = max(4, int(8 * camera.zoom))
-        face_top = max(6, int(12 * camera.zoom))
-        face_height = max(8, int(20 * camera.zoom))
-        face = pygame.Rect(
-            screen_rect.x + face_margin,
-            screen_rect.y + face_top,
-            screen_rect.width - face_margin * 2,
-            face_height
+        zoom = camera.zoom
+        
+        # Helper function to scale dimensions
+        def scale(val):
+            return max(1, int(val * zoom))
+        
+        # The visual character is slightly thinner than collision box
+        # Collision box is 48x96, visual will be ~32x96 (centered)
+        visual_width = scale(32)
+        visual_offset = (screen_rect.width - visual_width) // 2
+        visual_x = screen_rect.x + visual_offset
+        
+        # Flip offset for facing left
+        flip_offset = 0 if self.facing_right else visual_width
+        
+        # Proportions for a more human-like character
+        # Head: ~24 pixels
+        # Body: ~32 pixels
+        # Legs: ~40 pixels
+        head_height = scale(24)
+        body_height = scale(32)
+        leg_height = scale(40)
+        
+        # Colors
+        skin_color = (255, 220, 185)  # Skin tone
+        shirt_color = (70, 130, 180)  # Steel blue shirt
+        shirt_dark = (50, 100, 150)   # Darker blue for shading
+        pants_color = (60, 60, 90)    # Dark blue-gray pants
+        pants_dark = (40, 40, 60)     # Darker pants
+        hair_color = (60, 40, 25)     # Dark brown hair
+        shoe_color = (50, 35, 20)     # Dark brown shoes
+        
+        # Helper to flip x coordinate if facing left
+        def flip_x(x):
+            if self.facing_right:
+                return x
+            return visual_x + visual_width - (x - visual_x)
+        
+        # === DRAW LEGS ===
+        leg_y = screen_rect.y + head_height + body_height
+        leg_gap = scale(2)
+        leg_width = (visual_width - leg_gap) // 2
+        
+        # Left leg (or right leg if flipped)
+        left_leg_x = visual_x if self.facing_right else visual_x + leg_width + leg_gap
+        left_leg = pygame.Rect(
+            left_leg_x,
+            leg_y,
+            leg_width,
+            leg_height - scale(6)
         )
-        pygame.draw.rect(surface, (200, 180, 160), face)
-        # Draw eyes (scaled with zoom)
-        eye_size = max(2, int(6 * camera.zoom))
-        eye_offset_x = max(7, int(14 * camera.zoom))
-        eye_offset_y = max(9, int(18 * camera.zoom))
-        pygame.draw.rect(surface, (0, 0, 0),
-                         (screen_rect.x + eye_offset_x, screen_rect.y + eye_offset_y, eye_size, eye_size))
-        pygame.draw.rect(surface, (0, 0, 0),
-                         (screen_rect.x + screen_rect.width - eye_offset_x - eye_size,
-                          screen_rect.y + eye_offset_y, eye_size, eye_size))
+        pygame.draw.rect(surface, pants_color, left_leg)
+        # Shading
+        shade_x = left_leg.right - scale(4) if self.facing_right else left_leg.x
+        pygame.draw.rect(surface, pants_dark, 
+                        (shade_x, left_leg.y, scale(4), left_leg.height))
+        
+        # Right leg (or left leg if flipped)
+        right_leg_x = visual_x + leg_width + leg_gap if self.facing_right else visual_x
+        right_leg = pygame.Rect(
+            right_leg_x,
+            leg_y,
+            leg_width,
+            leg_height - scale(6)
+        )
+        pygame.draw.rect(surface, pants_color, right_leg)
+        # Shading
+        shade_x = right_leg.right - scale(4) if self.facing_right else right_leg.x
+        pygame.draw.rect(surface, pants_dark,
+                        (shade_x, right_leg.y, scale(4), right_leg.height))
+        
+        # Shoes
+        shoe_height = scale(6)
+        shoe_extend = scale(2)
+        left_shoe_x = visual_x - shoe_extend if self.facing_right else visual_x + leg_width + leg_gap - shoe_extend
+        left_shoe = pygame.Rect(
+            left_shoe_x,
+            screen_rect.bottom - shoe_height,
+            leg_width + shoe_extend * 2,
+            shoe_height
+        )
+        pygame.draw.rect(surface, shoe_color, left_shoe)
+        
+        right_shoe_x = visual_x + leg_width + leg_gap - shoe_extend if self.facing_right else visual_x - shoe_extend
+        right_shoe = pygame.Rect(
+            right_shoe_x,
+            screen_rect.bottom - shoe_height,
+            leg_width + shoe_extend * 2,
+            shoe_height
+        )
+        pygame.draw.rect(surface, shoe_color, right_shoe)
+        
+        # === DRAW BODY/TORSO ===
+        body_rect = pygame.Rect(
+            visual_x,
+            screen_rect.y + head_height,
+            visual_width,
+            body_height
+        )
+        pygame.draw.rect(surface, shirt_color, body_rect)
+        
+        # Body shading (sides) - flip based on direction
+        left_shade_x = body_rect.x if not self.facing_right else body_rect.right - scale(4)
+        right_shade_x = body_rect.right - scale(4) if not self.facing_right else body_rect.x
+        pygame.draw.rect(surface, shirt_dark,
+                        (left_shade_x, body_rect.y, scale(4), body_rect.height))
+        
+        # Collar/neckline
+        collar_points = [
+            (body_rect.centerx, body_rect.y),
+            (body_rect.centerx - scale(8), body_rect.y + scale(6)),
+            (body_rect.centerx + scale(8), body_rect.y + scale(6)),
+        ]
+        pygame.draw.polygon(surface, shirt_dark, collar_points)
+        
+        # === DRAW ARMS ===
+        arm_width = scale(8)
+        arm_height = body_height - scale(2)
+        arm_extend = scale(4)  # How far arms extend from body
+        
+        # Front arm (the one facing the camera)
+        front_arm_x = visual_x + visual_width - arm_extend if self.facing_right else visual_x - arm_width + arm_extend
+        front_arm = pygame.Rect(
+            front_arm_x,
+            screen_rect.y + head_height + scale(2),
+            arm_width,
+            arm_height
+        )
+        pygame.draw.rect(surface, shirt_color, front_arm)
+        shade_x = front_arm.x if not self.facing_right else front_arm.right - scale(3)
+        pygame.draw.rect(surface, shirt_dark, (shade_x, front_arm.y, scale(3), front_arm.height))
+        
+        # Front hand
+        hand_width = scale(6)
+        hand_height = scale(6)
+        front_hand = pygame.Rect(
+            front_arm.x + (arm_width - hand_width) // 2,
+            front_arm.bottom - hand_height // 2,
+            hand_width,
+            hand_height
+        )
+        pygame.draw.ellipse(surface, skin_color, front_hand)
+        
+        # Back arm (behind body)
+        back_arm_x = visual_x - arm_width + arm_extend if self.facing_right else visual_x + visual_width - arm_extend
+        back_arm = pygame.Rect(
+            back_arm_x,
+            screen_rect.y + head_height + scale(2),
+            arm_width,
+            arm_height
+        )
+        pygame.draw.rect(surface, shirt_color, back_arm)
+        shade_x = back_arm.x if self.facing_right else back_arm.right - scale(3)
+        pygame.draw.rect(surface, shirt_dark, (shade_x, back_arm.y, scale(3), back_arm.height))
+        
+        # Back hand
+        back_hand = pygame.Rect(
+            back_arm.x + (arm_width - hand_width) // 2,
+            back_arm.bottom - hand_height // 2,
+            hand_width,
+            hand_height
+        )
+        pygame.draw.ellipse(surface, skin_color, back_hand)
+        
+        # === DRAW HEAD ===
+        head_width = scale(24)
+        head_offset = (visual_width - head_width) // 2
+        head_rect = pygame.Rect(
+            visual_x + head_offset,
+            screen_rect.y,
+            head_width,
+            head_height
+        )
+        pygame.draw.ellipse(surface, skin_color, head_rect)
+        
+        # Hair (top and sides)
+        hair_height = scale(10)
+        hair_rect = pygame.Rect(
+            head_rect.x + scale(2),
+            head_rect.y,
+            head_rect.width - scale(4),
+            hair_height
+        )
+        pygame.draw.ellipse(surface, hair_color, hair_rect)
+        
+        # Side hair / bangs - flip based on direction
+        bang_width = scale(4)
+        bang_height = scale(8)
+        # Bang on the side facing away from camera
+        bang_x = head_rect.x + scale(1) if self.facing_right else head_rect.right - bang_width - scale(1)
+        side_bang = pygame.Rect(
+            bang_x,
+            head_rect.y + scale(6),
+            bang_width,
+            bang_height
+        )
+        pygame.draw.rect(surface, hair_color, side_bang)
+        
+        # === DRAW FACE ===
+        # Offset face slightly based on direction
+        face_offset = scale(2) if self.facing_right else -scale(2)
+        
+        # Eyes
+        eye_width = scale(4)
+        eye_height = scale(3)
+        eye_y = head_rect.y + scale(10)
+        eye_spacing = scale(4)
+        
+        # Left eye (from character's perspective, so right when flipped)
+        left_eye_x = head_rect.centerx - eye_spacing - eye_width // 2 + face_offset
+        left_eye = pygame.Rect(
+            left_eye_x,
+            eye_y,
+            eye_width,
+            eye_height
+        )
+        pygame.draw.ellipse(surface, (255, 255, 255), left_eye)
+        
+        # Left pupil
+        pupil_size = scale(2)
+        pupil_offset = scale(1) if self.facing_right else -scale(1)
+        left_pupil = pygame.Rect(
+            left_eye.centerx - pupil_size // 2 + pupil_offset,
+            left_eye.centery - pupil_size // 2,
+            pupil_size,
+            pupil_size
+        )
+        pygame.draw.ellipse(surface, (0, 0, 0), left_pupil)
+        
+        # Right eye
+        right_eye_x = head_rect.centerx + eye_spacing - eye_width // 2 + face_offset
+        right_eye = pygame.Rect(
+            right_eye_x,
+            eye_y,
+            eye_width,
+            eye_height
+        )
+        pygame.draw.ellipse(surface, (255, 255, 255), right_eye)
+        
+        # Right pupil
+        right_pupil = pygame.Rect(
+            right_eye.centerx - pupil_size // 2 + pupil_offset,
+            right_eye.centery - pupil_size // 2,
+            pupil_size,
+            pupil_size
+        )
+        pygame.draw.ellipse(surface, (0, 0, 0), right_pupil)
+        
+        # Nose (small line) - offset based on direction
+        nose_x = head_rect.centerx + (scale(3) if self.facing_right else -scale(3))
+        nose_y = eye_y + eye_height + scale(2)
+        pygame.draw.line(surface, (220, 180, 150),
+                        (nose_x, nose_y),
+                        (nose_x, nose_y + scale(3)), scale(2))
+        
+        # Mouth
+        mouth_width = scale(4)
+        mouth_height = scale(2)
+        mouth_rect = pygame.Rect(
+            head_rect.centerx - mouth_width // 2 + face_offset,
+            head_rect.y + head_height - scale(6),
+            mouth_width,
+            mouth_height
+        )
+        pygame.draw.ellipse(surface, (180, 100, 100), mouth_rect)
