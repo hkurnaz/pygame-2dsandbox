@@ -4,9 +4,9 @@ import pygame
 from game.constants import (
     PLAYER_WIDTH, PLAYER_HEIGHT, PLAYER_COLOR,
     PLAYER_SPEED, PLAYER_JUMP_VELOCITY, GRAVITY, MAX_FALL_SPEED,
-    TILE_SIZE
+    TILE_SIZE, PLATFORM_THICKNESS
 )
-from game.blocks import is_block_solid, BlockType
+from game.blocks import is_block_solid, is_block_platform, BlockType
 
 
 class Player:
@@ -22,6 +22,13 @@ class Player:
         self.on_ground = False
         self.color = PLAYER_COLOR
         self.facing_right = True  # Player facing direction
+        self.dropping_through_platform = False  # Track if player is dropping through a platform
+        self.drop_platform_y = 0  # Y position of platform we're dropping through
+        self.current_platform_tiles = set()  # Track which platform tiles we're on
+        
+        # UFO mode (debug/creative mode)
+        self.ufo_mode = False
+        self.ufo_speed = PLAYER_SPEED * 2  # Faster in UFO mode
 
     @property
     def rect(self):
@@ -38,34 +45,88 @@ class Player:
 
     def handle_input(self, keys):
         """Handle keyboard input for movement."""
-        self.vx = 0
+        if self.ufo_mode:
+            # UFO mode: free flight in all directions
+            self.vx = 0
+            self.vy = 0
+            
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                self.vx = -self.ufo_speed
+                self.facing_right = False
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                self.vx = self.ufo_speed
+                self.facing_right = True
+            if keys[pygame.K_UP] or keys[pygame.K_w]:
+                self.vy = -self.ufo_speed
+            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                self.vy = self.ufo_speed
+        else:
+            # Normal mode
+            self.vx = 0
 
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.vx = -PLAYER_SPEED
-            self.facing_right = False
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.vx = PLAYER_SPEED
-            self.facing_right = True
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                self.vx = -PLAYER_SPEED
+                self.facing_right = False
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                self.vx = PLAYER_SPEED
+                self.facing_right = True
 
-        # Jump
-        if (keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w]) and self.on_ground:
-            self.vy = PLAYER_JUMP_VELOCITY
-            self.on_ground = False
+            # Jump
+            if (keys[pygame.K_SPACE] or keys[pygame.K_UP] or keys[pygame.K_w]) and self.on_ground:
+                self.vy = PLAYER_JUMP_VELOCITY
+                self.on_ground = False
+                # When jumping, clear platform tracking
+                self.current_platform_tiles.clear()
+
+            # Drop through platform (S key or Down arrow)
+            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                if self.on_ground and self.current_platform_tiles:
+                    self.dropping_through_platform = True
+                    self.on_ground = False
+                    self.vy = 3  # Small downward velocity to start dropping
+                    # Store the Y position of the platform we're dropping through
+                    # Get the platform tile Y from current_platform_tiles
+                    if self.current_platform_tiles:
+                        tile_pos = next(iter(self.current_platform_tiles))
+                        self.drop_platform_y = tile_pos[1] * TILE_SIZE
+                    self.current_platform_tiles.clear()
 
     def update(self, world):
         """Update player physics and collisions with world."""
-        # Apply gravity
-        self.vy += GRAVITY
-        if self.vy > MAX_FALL_SPEED:
-            self.vy = MAX_FALL_SPEED
+        if self.ufo_mode:
+            # UFO mode: no gravity, free movement, no collisions
+            self.x += self.vx
+            self.y += self.vy
+            # Clamp to world bounds
+            self.x = max(0, min(self.x, world.width * TILE_SIZE - self.width))
+            self.y = max(0, min(self.y, world.height * TILE_SIZE - self.height))
+        else:
+            # Normal mode: apply gravity
+            self.vy += GRAVITY
+            if self.vy > MAX_FALL_SPEED:
+                self.vy = MAX_FALL_SPEED
 
-        # Horizontal movement with collision
-        self.x += self.vx
-        self._resolve_horizontal_collisions(world)
+            # Horizontal movement with collision
+            self.x += self.vx
+            self._resolve_horizontal_collisions(world)
 
-        # Vertical movement with collision
-        self.y += self.vy
-        self._resolve_vertical_collisions(world)
+            # Vertical movement with collision
+            self.y += self.vy
+            self._resolve_vertical_collisions(world)
+
+            # Reset dropping state when player has passed through the platform
+            # (player's feet are below the platform's bottom)
+            if self.dropping_through_platform:
+                player_bottom = self.y + self.height
+                if player_bottom > self.drop_platform_y + PLATFORM_THICKNESS + 5:
+                    self.dropping_through_platform = False
+    
+    def toggle_ufo_mode(self):
+        """Toggle UFO mode on/off."""
+        self.ufo_mode = not self.ufo_mode
+        if self.ufo_mode:
+            self.vy = 0  # Reset vertical velocity when entering UFO mode
+        return self.ufo_mode
 
     def _resolve_horizontal_collisions(self, world):
         """Resolve collisions on the horizontal axis."""
@@ -81,6 +142,9 @@ class Player:
                 bt = world.get_block(tx, ty)
                 # Skip tree blocks (WOOD, LEAVES) - player can walk through
                 if bt in (BlockType.WOOD, BlockType.LEAVES):
+                    continue
+                # Skip platforms - they only affect vertical collision from above
+                if bt == BlockType.PLATFORM:
                     continue
                 if world.is_solid(tx, ty):
                     block_rect = pygame.Rect(
@@ -109,6 +173,7 @@ class Player:
         bottom_tile = rect.bottom // TILE_SIZE
 
         self.on_ground = False
+        self.current_platform_tiles.clear()
 
         for ty in range(top_tile, bottom_tile + 1):
             for tx in range(left_tile, right_tile + 1):
@@ -116,6 +181,34 @@ class Player:
                 # Skip tree blocks (WOOD, LEAVES) - player can walk through
                 if bt in (BlockType.WOOD, BlockType.LEAVES):
                     continue
+                
+                # Handle platforms specially
+                if bt == BlockType.PLATFORM:
+                    # Platform is thin at top of tile
+                    platform_top = ty * TILE_SIZE
+                    platform_bottom = platform_top + PLATFORM_THICKNESS
+                    platform_rect = pygame.Rect(
+                        tx * TILE_SIZE,
+                        platform_top,
+                        TILE_SIZE,
+                        PLATFORM_THICKNESS
+                    )
+                    
+                    # Only collide when falling and not dropping through
+                    if self.vy > 0 and not self.dropping_through_platform:
+                        # Check if player's feet are at or just above the platform
+                        player_bottom = self.y + self.height
+                        # Player must be above the platform bottom to land
+                        if player_bottom >= platform_top and player_bottom <= platform_bottom + self.vy:
+                            # Land on platform
+                            self.y = platform_top - self.height
+                            self.vy = 0
+                            self.on_ground = True
+                            self.current_platform_tiles.add((tx, ty))
+                            rect = self.rect
+                    # Allow jumping through from below (vy < 0) - no collision
+                    continue
+                
                 if world.is_solid(tx, ty):
                     block_rect = pygame.Rect(
                         tx * TILE_SIZE,

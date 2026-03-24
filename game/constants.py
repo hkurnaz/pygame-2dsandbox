@@ -98,3 +98,23 @@ ZOMBIE_SPAWN_INTERVAL = 5.0  # seconds between spawn attempts
 ZOMBIE_MAX_COUNT = 10  # max zombies at once
 ZOMBIE_SPAWN_DISTANCE_MIN = 300  # minimum distance from player
 ZOMBIE_SPAWN_DISTANCE_MAX = 500  # maximum distance from player
+
+# Flying Eye settings (night enemy)
+EYE_WIDTH = 48
+EYE_HEIGHT = 48
+EYE_SPEED = 2.5
+EYE_HEALTH = 2
+EYE_DAMAGE = 1
+EYE_KNOCKBACK_FORCE = 6.0  # Knockback speed for the eye
+EYE_PLAYER_DRAG_DISTANCE = 64  # 2 blocks (32 * 2)
+EYE_SPAWN_INTERVAL = 8.0  # seconds between spawn attempts
+EYE_MAX_COUNT = 5  # max flying eyes at once
+
+# Platform settings
+PLATFORM_THICKNESS = 8  # pixels (thin platform, 1/4 of tile)
+
+# Lighting settings
+LIGHT_RADIUS_DAY = 8  # blocks - fully visible area around player (day)
+LIGHT_RADIUS_NIGHT = 6  # blocks - fully visible area around player (night, reduced)
+LIGHT_FADE_DISTANCE = 12  # blocks - distance to complete darkness
+UNDERGROUND_LIGHT_LIMIT = 5  # blocks - visibility limit below ground during day

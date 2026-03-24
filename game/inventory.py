@@ -8,7 +8,7 @@ from game.constants import (
 )
 from game.blocks import (
     get_item_color, get_item_name, BlockType, is_tool, ToolType,
-    CRAFTING_RECIPES, get_craftable_items, ItemType
+    CRAFTING_RECIPES, get_craftable_items, ItemType, get_tool_damage
 )
 
 
@@ -198,6 +198,142 @@ def draw_tool(surface, tool_type, rect):
             (cx + w // 6 - 6, cy - 4),
             (cx + w // 6 - 6, cy + 4),
         ])
+    
+    # Iron tools (silver colored, better quality)
+    elif tool_type == ToolType.IRON_SWORD:
+        _draw_sword_variant(surface, rect, (200, 200, 220), (150, 150, 170))
+    elif tool_type == ToolType.IRON_PICKAXE:
+        _draw_pickaxe_variant(surface, rect, (200, 200, 220))
+    elif tool_type == ToolType.IRON_AXE:
+        _draw_axe_variant(surface, rect, (200, 200, 220))
+    elif tool_type == ToolType.IRON_SHOVEL:
+        _draw_shovel_variant(surface, rect, (200, 200, 220))
+    # Gold tools (golden colored)
+    elif tool_type == ToolType.GOLD_SWORD:
+        _draw_sword_variant(surface, rect, (255, 215, 0), (200, 170, 0))
+    elif tool_type == ToolType.GOLD_PICKAXE:
+        _draw_pickaxe_variant(surface, rect, (255, 215, 0))
+    elif tool_type == ToolType.GOLD_AXE:
+        _draw_axe_variant(surface, rect, (255, 215, 0))
+    elif tool_type == ToolType.GOLD_SHOVEL:
+        _draw_shovel_variant(surface, rect, (255, 215, 0))
+
+
+def _draw_sword_variant(surface, rect, blade_color, guard_color):
+    """Draw a sword variant with custom colors."""
+    cx = rect.centerx
+    w = rect.width
+    h = rect.height
+    blade_width = w // 5
+    blade_height = int(h * 0.65)
+    handle_width = w // 4
+    handle_height = h // 4
+    
+    blade_points = [
+        (cx, rect.top + 2),
+        (cx - blade_width // 2, rect.top + blade_height // 2),
+        (cx - blade_width // 2, rect.top + blade_height),
+        (cx + blade_width // 2, rect.top + blade_height),
+        (cx + blade_width // 2, rect.top + blade_height // 2),
+    ]
+    pygame.draw.polygon(surface, blade_color, blade_points)
+    pygame.draw.polygon(surface, tuple(max(0, c - 50) for c in blade_color), blade_points, 1)
+    
+    guard_rect = pygame.Rect(cx - w // 3, rect.top + blade_height, w * 2 // 3, h // 10)
+    pygame.draw.rect(surface, guard_color, guard_rect)
+    pygame.draw.rect(surface, tuple(max(0, c - 30) for c in guard_color), guard_rect, 1)
+    
+    handle_rect = pygame.Rect(cx - handle_width // 2, rect.top + blade_height + h // 10, 
+                              handle_width, handle_height)
+    pygame.draw.rect(surface, (139, 90, 43), handle_rect)
+    pygame.draw.rect(surface, (100, 60, 30), handle_rect, 1)
+
+
+def _draw_pickaxe_variant(surface, rect, head_color):
+    """Draw a pickaxe variant with custom color."""
+    cx = rect.centerx
+    w = rect.width
+    h = rect.height
+    handle_width = w // 5
+    handle_height = int(h * 0.75)
+    
+    handle_rect = pygame.Rect(cx - handle_width // 2, rect.top + h // 8,
+                              handle_width, handle_height)
+    pygame.draw.rect(surface, (139, 90, 43), handle_rect)
+    pygame.draw.rect(surface, (100, 60, 30), handle_rect, 1)
+    
+    head_y = rect.top + h // 6
+    left_points = [
+        (rect.left + 2, head_y - h // 8),
+        (cx - handle_width // 2 - 2, head_y + h // 10),
+        (rect.left + 2, head_y + h // 6),
+    ]
+    pygame.draw.polygon(surface, head_color, left_points)
+    pygame.draw.polygon(surface, tuple(max(0, c - 50) for c in head_color), left_points, 1)
+    
+    right_points = [
+        (rect.right - 2, head_y - h // 8),
+        (cx + handle_width // 2 + 2, head_y + h // 10),
+        (rect.right - 2, head_y + h // 6),
+    ]
+    pygame.draw.polygon(surface, head_color, right_points)
+    pygame.draw.polygon(surface, tuple(max(0, c - 50) for c in head_color), right_points, 1)
+
+
+def _draw_axe_variant(surface, rect, head_color):
+    """Draw an axe variant with custom color."""
+    cx = rect.centerx
+    w = rect.width
+    h = rect.height
+    handle_width = w // 5
+    handle_height = int(h * 0.75)
+    
+    handle_rect = pygame.Rect(cx - handle_width // 2, rect.top + h // 8,
+                              handle_width, handle_height)
+    pygame.draw.rect(surface, (139, 90, 43), handle_rect)
+    pygame.draw.rect(surface, (100, 60, 30), handle_rect, 1)
+    
+    head_y = rect.top + h // 6
+    blade_width = w // 2
+    blade_height = h // 3
+    
+    blade_points = [
+        (cx - handle_width // 2 - 2, head_y),
+        (cx + blade_width, head_y - h // 12),
+        (cx + blade_width + w // 8, head_y + blade_height // 2),
+        (cx + blade_width, head_y + blade_height),
+        (cx - handle_width // 2 - 2, head_y + blade_height),
+    ]
+    pygame.draw.polygon(surface, head_color, blade_points)
+    pygame.draw.polygon(surface, tuple(max(0, c - 50) for c in head_color), blade_points, 1)
+
+
+def _draw_shovel_variant(surface, rect, head_color):
+    """Draw a shovel variant with custom color."""
+    cx = rect.centerx
+    w = rect.width
+    h = rect.height
+    handle_width = w // 5
+    handle_height = int(h * 0.6)
+    
+    handle_rect = pygame.Rect(cx - handle_width // 2, rect.top + h // 4,
+                              handle_width, handle_height)
+    pygame.draw.rect(surface, (139, 90, 43), handle_rect)
+    pygame.draw.rect(surface, (100, 60, 30), handle_rect, 1)
+    
+    head_y = rect.top + h // 5
+    head_width = w // 3
+    head_height = h // 3
+    
+    blade_points = [
+        (cx, rect.top + 2),
+        (cx + head_width, head_y + head_height // 3),
+        (cx + head_width // 2, head_y + head_height),
+        (cx - head_width // 2, head_y + head_height),
+        (cx - head_width, head_y + head_height // 3),
+    ]
+    pygame.draw.polygon(surface, head_color, blade_points)
+    pygame.draw.polygon(surface, tuple(max(0, c - 50) for c in head_color), blade_points, 1)
 
 
 def draw_item(surface, item_type, rect):
@@ -273,6 +409,167 @@ def draw_item(surface, item_type, rect):
         handle_size = max(2, rect.width // 8)
         pygame.draw.circle(surface, (200, 180, 50), (handle_x, handle_y), handle_size)
         
+    elif item_type == BlockType.PLATFORM:
+        # Draw platform icon - thin horizontal plank
+        platform_color = (160, 120, 60)
+        grain_color = (130, 90, 40)
+        edge_color = (100, 70, 30)
+        
+        # Platform is thin, positioned at top of slot (aligned with where it would be in world)
+        platform_height = rect.height // 4
+        platform_rect = pygame.Rect(
+            rect.left,
+            rect.top,
+            rect.width,
+            platform_height
+        )
+        pygame.draw.rect(surface, platform_color, platform_rect)
+        
+        # Wood grain lines
+        for i in range(2):
+            y = rect.top + platform_height * (i + 1) // 3
+            pygame.draw.line(surface, grain_color,
+                           (rect.left, int(y)), (rect.right, int(y)), 1)
+        
+        # Darker bottom edge
+        pygame.draw.line(surface, edge_color,
+                        (rect.left, rect.top + platform_height - 1),
+                        (rect.right, rect.top + platform_height - 1), 1)
+        
+        # Border
+        pygame.draw.rect(surface, (80, 50, 20), platform_rect, 1)
+        
+    elif item_type == BlockType.TORCH:
+        # Draw torch icon - stick with flame
+        cx = rect.centerx
+        cy = rect.centery
+        
+        # Wooden stick
+        stick_color = (101, 67, 33)
+        stick_width = rect.width // 4
+        stick_rect = pygame.Rect(
+            cx - stick_width // 2,
+            rect.top + rect.height // 3,
+            stick_width,
+            rect.height * 2 // 3
+        )
+        pygame.draw.rect(surface, stick_color, stick_rect)
+        
+        # Flame
+        flame_base_y = rect.top + rect.height // 3
+        
+        # Outer flame (orange-red)
+        pygame.draw.circle(surface, (255, 100, 0), (cx, flame_base_y), rect.width // 3)
+        # Middle flame (orange)
+        pygame.draw.circle(surface, (255, 165, 0), (cx, flame_base_y - 2), rect.width // 4)
+        # Inner flame (yellow)
+        pygame.draw.circle(surface, (255, 255, 100), (cx, flame_base_y - 4), rect.width // 6)
+        # Bright center
+        pygame.draw.circle(surface, (255, 255, 200), (cx, flame_base_y - 5), rect.width // 10)
+        
+    elif item_type == BlockType.COAL_ORE:
+        # Coal ore icon
+        pygame.draw.rect(surface, (60, 60, 60), rect)
+        pygame.draw.rect(surface, (30, 30, 30), (rect.left + 4, rect.top + 4, rect.width//3, rect.height//3))
+        pygame.draw.rect(surface, (40, 40, 40), (rect.left + rect.width//2, rect.top + rect.height//2, rect.width//3, rect.height//3))
+        
+    elif item_type == BlockType.IRON_ORE:
+        # Iron ore icon
+        pygame.draw.rect(surface, (120, 100, 80), rect)
+        pygame.draw.circle(surface, (180, 160, 140), (rect.left + rect.width//3, rect.top + rect.height//3), 5)
+        pygame.draw.circle(surface, (170, 150, 130), (rect.left + rect.width*2//3, rect.top + rect.height*2//3), 4)
+        
+    elif item_type == BlockType.GOLD_ORE:
+        # Gold ore icon
+        pygame.draw.rect(surface, (160, 140, 80), rect)
+        pygame.draw.circle(surface, (255, 215, 0), (rect.left + rect.width//3, rect.top + rect.height//3), 5)
+        pygame.draw.circle(surface, (240, 200, 0), (rect.left + rect.width*2//3, rect.top + rect.height*2//3), 4)
+        
+    elif item_type == BlockType.FURNACE:
+        # Furnace icon
+        pygame.draw.rect(surface, (80, 80, 80), rect)
+        pygame.draw.rect(surface, (60, 60, 60), rect, 2)
+        # Opening
+        opening = pygame.Rect(rect.left + rect.width//4, rect.top + rect.height//4, rect.width//2, rect.height//2)
+        pygame.draw.rect(surface, (30, 30, 30), opening)
+        pygame.draw.circle(surface, (255, 100, 0), (rect.centerx, rect.centery), 3)
+        
+    elif item_type == BlockType.IRON_INGOT:
+        # Iron ingot icon - metallic bar
+        pygame.draw.rect(surface, (180, 180, 200), rect)
+        pygame.draw.rect(surface, (140, 140, 160), rect, 2)
+        # Shine
+        pygame.draw.line(surface, (230, 230, 255), (rect.left + 4, rect.top + 4), (rect.right - 8, rect.top + 4), 2)
+        
+    elif item_type == BlockType.GOLD_INGOT:
+        # Gold ingot icon - golden bar
+        pygame.draw.rect(surface, (255, 215, 0), rect)
+        pygame.draw.rect(surface, (200, 160, 0), rect, 2)
+        # Shine
+        pygame.draw.line(surface, (255, 255, 200), (rect.left + 4, rect.top + 4), (rect.right - 8, rect.top + 4), 2)
+        
+    elif item_type == BlockType.HAT:
+        # Hat icon - leather cap
+        pygame.draw.ellipse(surface, (80, 60, 40), pygame.Rect(rect.left + 2, rect.top + 2, rect.width - 4, rect.height // 2))
+        pygame.draw.rect(surface, (70, 50, 30), pygame.Rect(rect.left + 2, rect.top + rect.height//3, rect.width - 4, rect.height * 2 // 3))
+        
+    elif item_type == BlockType.BODY_ARMOR:
+        # Body armor icon - leather vest
+        pygame.draw.rect(surface, (100, 80, 60), rect)
+        # Chest plate
+        pygame.draw.rect(surface, (80, 60, 40), pygame.Rect(rect.left + 4, rect.top + 4, rect.width - 8, rect.height - 8))
+        # Straps
+        pygame.draw.line(surface, (60, 40, 20), (rect.left + 6, rect.top + 6), (rect.right - 6, rect.top + 6), 2)
+        
+    elif item_type == BlockType.LEGGINGS:
+        # Leggings icon - leather pants
+        pygame.draw.rect(surface, (70, 55, 35), rect)
+        # Leg shapes
+        pygame.draw.rect(surface, (55, 40, 25), pygame.Rect(rect.left + 3, rect.top + 4, rect.width//3, rect.height - 8))
+        pygame.draw.rect(surface, (55, 40, 25), pygame.Rect(rect.left + rect.width*2//3 - 3, rect.top + 4, rect.width//3, rect.height - 8))
+    
+    # Iron armor
+    elif item_type == BlockType.IRON_HAT:
+        # Iron helmet - metallic
+        pygame.draw.ellipse(surface, (180, 180, 200), pygame.Rect(rect.left + 2, rect.top + 2, rect.width - 4, rect.height // 2))
+        pygame.draw.rect(surface, (160, 160, 180), pygame.Rect(rect.left + 2, rect.top + rect.height//3, rect.width - 4, rect.height * 2 // 3))
+        # Visor slit
+        pygame.draw.line(surface, (60, 60, 80), (rect.left + 6, rect.centery), (rect.right - 6, rect.centery), 2)
+        
+    elif item_type == BlockType.IRON_BODY_ARMOR:
+        # Iron body armor - metallic chest plate
+        pygame.draw.rect(surface, (170, 170, 190), rect)
+        pygame.draw.rect(surface, (150, 150, 170), pygame.Rect(rect.left + 4, rect.top + 4, rect.width - 8, rect.height - 8))
+        # Shine
+        pygame.draw.line(surface, (200, 200, 220), (rect.left + 6, rect.top + 6), (rect.left + 6, rect.bottom - 6), 2)
+        
+    elif item_type == BlockType.IRON_LEGGINGS:
+        # Iron leggings - metallic
+        pygame.draw.rect(surface, (160, 160, 180), rect)
+        pygame.draw.rect(surface, (140, 140, 160), pygame.Rect(rect.left + 3, rect.top + 4, rect.width//3, rect.height - 8))
+        pygame.draw.rect(surface, (140, 140, 160), pygame.Rect(rect.left + rect.width*2//3 - 3, rect.top + 4, rect.width//3, rect.height - 8))
+    
+    # Gold armor
+    elif item_type == BlockType.GOLD_HAT:
+        # Gold helmet - golden
+        pygame.draw.ellipse(surface, (255, 215, 0), pygame.Rect(rect.left + 2, rect.top + 2, rect.width - 4, rect.height // 2))
+        pygame.draw.rect(surface, (230, 190, 0), pygame.Rect(rect.left + 2, rect.top + rect.height//3, rect.width - 4, rect.height * 2 // 3))
+        # Visor slit
+        pygame.draw.line(surface, (150, 120, 0), (rect.left + 6, rect.centery), (rect.right - 6, rect.centery), 2)
+        
+    elif item_type == BlockType.GOLD_BODY_ARMOR:
+        # Gold body armor - golden chest plate
+        pygame.draw.rect(surface, (255, 215, 0), rect)
+        pygame.draw.rect(surface, (230, 190, 0), pygame.Rect(rect.left + 4, rect.top + 4, rect.width - 8, rect.height - 8))
+        # Shine
+        pygame.draw.line(surface, (255, 255, 200), (rect.left + 6, rect.top + 6), (rect.left + 6, rect.bottom - 6), 2)
+        
+    elif item_type == BlockType.GOLD_LEGGINGS:
+        # Gold leggings - golden
+        pygame.draw.rect(surface, (240, 200, 0), rect)
+        pygame.draw.rect(surface, (220, 180, 0), pygame.Rect(rect.left + 3, rect.top + 4, rect.width//3, rect.height - 8))
+        pygame.draw.rect(surface, (220, 180, 0), pygame.Rect(rect.left + rect.width*2//3 - 3, rect.top + 4, rect.width//3, rect.height - 8))
+        
     else:
         # Default: draw colored block
         color = get_item_color(item_type)
@@ -300,10 +597,13 @@ class Inventory:
         self.hovered_slot = -1
         self.is_open = False  # Big inventory open state
 
+        # Armor slots: hat, body_armor, leggings
+        self.armor = [None, None, None]  # [hat, body, leggings]
+        
         # Drag and drop
         self.dragging = False
         self.drag_item = None  # (block_type, count)
-        self.drag_source = None  # ('hotbar', index) or ('storage', row, col)
+        self.drag_source = None  # ('hotbar', index) or ('storage', row, col) or ('armor', index)
         
         # Crafting
         self.craftable_items = []  # List of craftable (result_item, result_count, ingredients)
@@ -424,7 +724,7 @@ class Inventory:
         return None
 
     def start_drag(self, source_type, *args):
-        """Start dragging an item. source_type: 'hotbar' or 'storage'."""
+        """Start dragging an item. source_type: 'hotbar', 'storage', or 'armor'."""
         if source_type == 'hotbar':
             index = args[0]
             if self.hotbar[index] is not None:
@@ -438,6 +738,13 @@ class Inventory:
                 self.drag_item = self.storage[row][col]
                 self.drag_source = ('storage', row, col)
                 self.storage[row][col] = None
+                self.dragging = True
+        elif source_type == 'armor':
+            index = args[0]
+            if self.armor[index] is not None:
+                self.drag_item = self.armor[index]
+                self.drag_source = ('armor', index)
+                self.armor[index] = None
                 self.dragging = True
 
     def end_drag(self, target_type, *args):
@@ -462,6 +769,8 @@ class Inventory:
                     self.hotbar[self.drag_source[1]] = old_item
                 elif self.drag_source[0] == 'storage':
                     self.storage[self.drag_source[1]][self.drag_source[2]] = old_item
+                elif self.drag_source[0] == 'armor':
+                    self.armor[self.drag_source[1]] = old_item
 
         elif target_type == 'storage':
             row, col = args[0], args[1]
@@ -478,6 +787,34 @@ class Inventory:
                     self.hotbar[self.drag_source[1]] = old_item
                 elif self.drag_source[0] == 'storage':
                     self.storage[self.drag_source[1]][self.drag_source[2]] = old_item
+                elif self.drag_source[0] == 'armor':
+                    self.armor[self.drag_source[1]] = old_item
+        
+        elif target_type == 'armor':
+            index = args[0]
+            # Check if item is valid for this armor slot
+            valid_armor = {
+                0: [BlockType.HAT, BlockType.IRON_HAT, BlockType.GOLD_HAT],  # Hat slot
+                1: [BlockType.BODY_ARMOR, BlockType.IRON_BODY_ARMOR, BlockType.GOLD_BODY_ARMOR],  # Body slot
+                2: [BlockType.LEGGINGS, BlockType.IRON_LEGGINGS, BlockType.GOLD_LEGGINGS]  # Leggings slot
+            }
+            if block_type in valid_armor.get(index, []):
+                if self.armor[index] is None:
+                    self.armor[index] = self.drag_item
+                else:
+                    # Swap items
+                    old_item = self.armor[index]
+                    self.armor[index] = self.drag_item
+                    if self.drag_source[0] == 'hotbar':
+                        self.hotbar[self.drag_source[1]] = old_item
+                    elif self.drag_source[0] == 'storage':
+                        self.storage[self.drag_source[1]][self.drag_source[2]] = old_item
+                    elif self.drag_source[0] == 'armor':
+                        self.armor[self.drag_source[1]] = old_item
+            else:
+                # Invalid armor type for this slot - return item to source
+                self.cancel_drag()
+                return False
 
         self.dragging = False
         self.drag_item = None
@@ -491,6 +828,8 @@ class Inventory:
                 self.hotbar[self.drag_source[1]] = self.drag_item
             elif self.drag_source[0] == 'storage':
                 self.storage[self.drag_source[1]][self.drag_source[2]] = self.drag_item
+            elif self.drag_source[0] == 'armor':
+                self.armor[self.drag_source[1]] = self.drag_item
         self.dragging = False
         self.drag_item = None
         self.drag_source = None
@@ -509,17 +848,22 @@ class Inventory:
                     items[item_type] = items.get(item_type, 0) + count
         return items
 
-    def update_craftable(self):
+    def update_craftable(self, near_furnace=False):
         """Update the list of craftable items based on current inventory."""
         items = self.get_all_items()
-        self.craftable_items = get_craftable_items(items)
+        self.craftable_items = get_craftable_items(items, near_furnace)
 
     def craft_item(self, result_item):
         """Craft an item. Returns True if successful."""
         if result_item not in CRAFTING_RECIPES:
             return False
         
-        result_count, ingredients = CRAFTING_RECIPES[result_item]
+        recipe_data = CRAFTING_RECIPES[result_item]
+        # Handle both old and new recipe formats
+        if len(recipe_data) == 3:
+            result_count, ingredients, requires_furnace = recipe_data
+        else:
+            result_count, ingredients = recipe_data
         
         # Check if we have all ingredients
         items = self.get_all_items()
@@ -580,6 +924,24 @@ class Inventory:
             if self.get_craft_slot_rect(i).collidepoint(mouse_x, mouse_y):
                 return i
         return -1
+    
+    def get_armor_slot_rect(self, index):
+        """Get the screen rect for an armor slot on the right side of inventory."""
+        bg_rect = self.get_inventory_background_rect()
+        armor_slot_size = 36
+        armor_padding = 5
+        
+        # Position armor slots on the right side of inventory
+        x = bg_rect.right + 10
+        y = bg_rect.top + 50 + index * (armor_slot_size + armor_padding)
+        return pygame.Rect(x, y, armor_slot_size, armor_slot_size)
+    
+    def check_armor_hover(self, mouse_x, mouse_y):
+        """Check which armor slot is being hovered. Returns index or -1."""
+        for i in range(3):
+            if self.get_armor_slot_rect(i).collidepoint(mouse_x, mouse_y):
+                return i
+        return -1
 
     def handle_click(self, mouse_x, mouse_y, button=1):
         """Handle mouse click. Returns clicked slot info or None."""
@@ -612,6 +974,16 @@ class Inventory:
                     else:
                         self.start_drag('storage', row, col)
                 return ('storage', row, col)
+            
+            # Check armor slots
+            armor_slot = self.check_armor_hover(mouse_x, mouse_y)
+            if armor_slot >= 0:
+                if button == 1:  # Left click
+                    if self.dragging:
+                        self.end_drag('armor', armor_slot)
+                    else:
+                        self.start_drag('armor', armor_slot)
+                return ('armor', armor_slot)
 
         return None
 
@@ -700,14 +1072,53 @@ class Inventory:
                         count_text = font.render(str(count), True, WHITE)
                         surface.blit(count_text, (rect.right - count_text.get_width() - 2,
                                                   rect.bottom - count_text.get_height() - 2))
+        
+        # Draw armor slots panel on the right
+        armor_panel_x = bg_rect.right + 5
+        armor_panel_y = bg_rect.top
+        armor_panel_width = 55
+        armor_panel_height = 180
+        
+        armor_panel_rect = pygame.Rect(armor_panel_x, armor_panel_y, armor_panel_width, armor_panel_height)
+        pygame.draw.rect(surface, (40, 40, 50), armor_panel_rect)
+        pygame.draw.rect(surface, (100, 100, 120), armor_panel_rect, 2)
+        
+        # Armor panel title
+        armor_title = title_font.render("Armor", True, WHITE)
+        surface.blit(armor_title, (armor_panel_x + 5, armor_panel_y + 5))
+        
+        # Draw armor slots
+        armor_labels = ["Hat", "Body", "Legs"]
+        for i in range(3):
+            rect = self.get_armor_slot_rect(i)
+            
+            # Draw slot background
+            pygame.draw.rect(surface, (70, 70, 80), rect)
+            pygame.draw.rect(surface, (100, 100, 110), rect, 1)
+            
+            # Draw label
+            label = font.render(armor_labels[i], True, (150, 150, 150))
+            surface.blit(label, (rect.x, rect.y - 12))
+            
+            # Draw item if present
+            if self.armor[i] is not None:
+                item_type, count = self.armor[i]
+                item_margin = 3
+                item_rect = pygame.Rect(
+                    rect.x + item_margin,
+                    rect.y + item_margin,
+                    rect.width - item_margin * 2,
+                    rect.height - item_margin * 2
+                )
+                draw_item_in_slot(surface, item_type, item_rect, False)
 
-    def draw_crafting_panel(self, surface, mouse_x, mouse_y):
+    def draw_crafting_panel(self, surface, mouse_x, mouse_y, near_furnace=False):
         """Draw the crafting panel on the left side."""
         if not self.is_open:
             return
         
         # Update craftable items
-        self.update_craftable()
+        self.update_craftable(near_furnace)
         
         # Panel background
         panel_x = 5
@@ -795,11 +1206,11 @@ class Inventory:
                 surface.blit(count_text, (item_rect.right - count_text.get_width() - 2,
                                           item_rect.bottom - count_text.get_height() - 2))
 
-    def draw(self, surface, mouse_x=0, mouse_y=0):
+    def draw(self, surface, mouse_x=0, mouse_y=0, near_furnace=False):
         """Draw the inventory (hotbar always, storage if open)."""
         self.draw_hotbar(surface)
         if self.is_open:
-            self.draw_crafting_panel(surface, mouse_x, mouse_y)
+            self.draw_crafting_panel(surface, mouse_x, mouse_y, near_furnace)
             self.draw_storage(surface)
 
     def draw_tooltip(self, surface, mouse_x, mouse_y):

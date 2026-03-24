@@ -10,7 +10,8 @@ import random
 from game.constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, FPS, SKY_BLUE, WHITE, YELLOW,
     TILE_SIZE, BREAK_RANGE, DAY_DURATION, DAY_SKY_COLOR, NIGHT_SKY_COLOR,
-    SWORD_SWING_DURATION, SWORD_SWING_RANGE, SWORD_DAMAGE, THROW_FORCE, THROW_UPWARD_ANGLE
+    SWORD_SWING_DURATION, SWORD_SWING_RANGE, SWORD_DAMAGE, THROW_FORCE, THROW_UPWARD_ANGLE,
+    LIGHT_RADIUS_DAY, LIGHT_RADIUS_NIGHT, LIGHT_FADE_DISTANCE, UNDERGROUND_LIGHT_LIMIT
 )
 
 # Game states
@@ -23,7 +24,7 @@ from game.camera import Camera
 from game.drops import DropManager, ParticleManager, ArrowManager
 from game.inventory import Inventory
 from game.enemy import EnemyManager
-from game.blocks import get_break_time, get_break_time_with_tool, get_block_name, get_item_name, is_block_breakable, BlockType, ToolType, ItemType, is_tool
+from game.blocks import get_break_time, get_break_time_with_tool, get_block_name, get_item_name, is_block_breakable, BlockType, ToolType, ItemType, is_tool, get_tool_damage
 
 
 class Game:
@@ -164,6 +165,9 @@ class Game:
                     # Q key to drop item
                     elif event.key == pygame.K_q:
                         self._drop_selected_item()
+                    # R key to toggle UFO mode (debug/creative mode)
+                    elif event.key == pygame.K_r:
+                        self.player.toggle_ufo_mode()
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:  # Left click
                         self.mouse_held = True
@@ -293,13 +297,19 @@ class Game:
         dy = world_y - swing_origin_y
         self.sword_swing_angle = math.atan2(dy, dx)
         
+        # Get sword damage from tool stats
+        selected_item = self.inventory.get_selected_item()
+        sword_damage = SWORD_DAMAGE  # Default damage
+        if selected_item is not None and is_tool(selected_item[0]):
+            sword_damage = get_tool_damage(selected_item[0])
+        
         # Check for enemy hits
         hit_enemies = self.enemy_manager.check_sword_hit(
             self.player.rect, self.sword_swing_angle, SWORD_SWING_RANGE
         )
         
         for enemy in hit_enemies:
-            enemy.take_damage(SWORD_DAMAGE)
+            enemy.take_damage(sword_damage)
             enemy.apply_knockback(player_center_x)
 
     def _shoot_bow(self):
@@ -556,6 +566,10 @@ class Game:
             self.camera.follow(self.player.rect)
             self.camera.update()
 
+            # UFO mode: instant block breaking when touching blocks
+            if self.player.ufo_mode:
+                self._ufo_break_blocks()
+
             # Handle breaking progress
             if self.mouse_held and self.breaking_tile is not None:
                 tile_x, tile_y = self.breaking_tile
@@ -606,15 +620,32 @@ class Game:
         self.particle_manager.update(dt)
         
         # Update arrows
-        self.arrow_manager.update(dt, self.world, self.enemy_manager.enemies)
+        all_enemies = self.enemy_manager.enemies + self.enemy_manager.flying_eyes
+        self.arrow_manager.update(dt, self.world, all_enemies)
         
         # Update enemies
-        damage_to_player = self.enemy_manager.update(dt, self.world, self.player.rect, self.is_night)
+        result = self.enemy_manager.update(dt, self.world, self.player.rect, self.is_night)
+        
+        # Handle result (damage and optional player drag)
+        if isinstance(result, tuple):
+            damage_to_player, player_drag = result
+        else:
+            damage_to_player = result
+            player_drag = None
         
         # Apply damage to player
         if damage_to_player > 0 and self.player_damage_cooldown <= 0:
             self.player_health -= damage_to_player
             self.player_damage_cooldown = 1.0  # 1 second cooldown
+            
+            # Apply player drag if hit by flying eye (using velocity/force, not teleport)
+            if player_drag is not None:
+                drag_distance, drag_dir_x, drag_dir_y = player_drag
+                # Apply force to player velocity instead of teleporting
+                # drag_distance represents the force magnitude
+                self.player.vx += drag_dir_x * 8  # Horizontal knockback force
+                self.player.vy += drag_dir_y * 5 - 3  # Vertical knockback (slight upward)
+            
             if self.player_health <= 0:
                 # Player dies - respawn
                 self._respawn_player()
@@ -656,6 +687,39 @@ class Game:
         # Spawn a drop
         self.drop_manager.spawn_drop(tile_x, tile_y, drop_type)
     
+    def _ufo_break_blocks(self):
+        """Break blocks that the UFO (player in UFO mode) is touching."""
+        # Get the tiles the player is overlapping
+        player_rect = self.player.rect
+        left_tile = player_rect.left // TILE_SIZE
+        right_tile = player_rect.right // TILE_SIZE
+        top_tile = player_rect.top // TILE_SIZE
+        bottom_tile = player_rect.bottom // TILE_SIZE
+        
+        blocks_broken = 0
+        for ty in range(top_tile, bottom_tile + 1):
+            for tx in range(left_tile, right_tile + 1):
+                block_type = self.world.get_block(tx, ty)
+                if is_block_breakable(block_type):
+                    self._break_block(tx, ty, block_type)
+                    blocks_broken += 1
+        
+        return blocks_broken
+    
+    def _is_near_furnace(self):
+        """Check if the player is near a furnace (within 3 tiles)."""
+        player_tile_x = int((self.player.x + self.player.width / 2) // TILE_SIZE)
+        player_tile_y = int((self.player.y + self.player.height / 2) // TILE_SIZE)
+        
+        check_range = 3
+        for dx in range(-check_range, check_range + 1):
+            for dy in range(-check_range, check_range + 1):
+                tx = player_tile_x + dx
+                ty = player_tile_y + dy
+                if self.world.get_block(tx, ty) == BlockType.FURNACE:
+                    return True
+        return False
+    
     def _respawn_player(self):
         """Respawn the player at the spawn point."""
         spawn_x, spawn_y = self.world.get_player_spawn()
@@ -664,7 +728,8 @@ class Game:
         self.player.vx = 0
         self.player.vy = 0
         self.player_health = self.player_max_health
-        self.enemy_manager.enemies.clear()  # Clear all enemies on death
+        self.enemy_manager.enemies.clear()  # Clear all zombies on death
+        self.enemy_manager.flying_eyes.clear()  # Clear all flying eyes on death
     
     def _handle_tree_collapse(self, tile_x, tile_y):
         """Check if breaking a wood block should collapse the tree above."""
@@ -767,22 +832,29 @@ class Game:
         if not self.inventory.is_open:
             self._draw_range_indicator()
 
+        # Draw darkness/lighting overlay
+        self._draw_lighting_overlay()
+
+        # ========== ALL UI ELEMENTS DRAWN AFTER LIGHTING ==========
+        # Check if player is near a furnace for smelting recipes
+        near_furnace = self._is_near_furnace()
+        
         # Draw inventory
         mouse_pos = pygame.mouse.get_pos()
-        self.inventory.draw(self.screen, *mouse_pos)
+        self.inventory.draw(self.screen, *mouse_pos, near_furnace)
 
         # Draw inventory tooltip
         self.inventory.draw_tooltip(self.screen, *mouse_pos)
 
         # Draw dragged item
         self.inventory.draw_drag_item(self.screen, *mouse_pos)
-        
+
         # Draw player health bar
         self._draw_health_bar()
 
         # Draw HUD / instructions
         self._draw_hud()
-        
+
         # Draw pause menu overlay
         if self.game_state == GAME_STATE_PAUSED:
             self._draw_pause_menu()
@@ -1176,10 +1248,19 @@ class Game:
         if self.is_night:
             enemy_count = font.render(f"Enemies: {len(self.enemy_manager.enemies)}", True, (255, 100, 100))
             self.screen.blit(enemy_count, (SCREEN_WIDTH - 100, 65))
+        
+        # Show UFO mode indicator
+        if self.player.ufo_mode:
+            ufo_text = pygame.font.SysFont(None, 28).render("UFO MODE (R to exit)", True, (0, 255, 255))
+            ufo_rect = ufo_text.get_rect(center=(SCREEN_WIDTH // 2, 30))
+            pygame.draw.rect(self.screen, (0, 50, 80), ufo_rect.inflate(20, 10))
+            self.screen.blit(ufo_text, ufo_rect)
 
         # Instructions at bottom
         if self.inventory.is_open:
             text = font.render("Tab: Close Inventory | Drag items to rearrange", True, WHITE)
+        elif self.player.ufo_mode:
+            text = font.render("UFO Mode: WASD to fly | Touch blocks to break | R to exit", True, (0, 255, 255))
         else:
             text = font.render(
                 "WASD: Move | Space: Jump | L-Click: Attack/Break | R-Click: Place | Tab: Inventory",
@@ -1221,6 +1302,178 @@ class Game:
             # Charge percentage text
             charge_text = font.render(f"Charge: {int(charge_ratio * 100)}%", True, WHITE)
             self.screen.blit(charge_text, (bar_x, bar_y - 20))
+
+    def _draw_lighting_overlay(self):
+        """Draw darkness overlay with optimized realistic lighting.
+        
+        Lighting model:
+        - Daytime: Sun illuminates from above. Surface is fully lit, darkness increases with depth.
+        - Nighttime: Dark everywhere except near light sources (player, torches).
+        - Torches: 10 block radius with line-of-sight shadows (don't illuminate behind solid blocks).
+        - Player: Emits light in a radius (smaller during day, larger at night).
+        
+        Optimizations:
+        - Process at tile level (32x32) not per-pixel - reduces work by 64x
+        - Pre-compute light map per light source, then composite
+        - Raycast at tile granularity, not half-tile
+        - Only raycast for tiles within light radius (early skip)
+        """
+        # Get player center in world coordinates
+        player_center_x = self.player.x + self.player.width / 2
+        player_center_y = self.player.y + self.player.height / 2
+        
+        # Create a surface for the darkness overlay
+        darkness_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        
+        # Light source radii (in blocks)
+        player_light_radius = LIGHT_RADIUS_NIGHT if self.is_night else LIGHT_RADIUS_DAY
+        torch_light_radius = 10  # Torches illuminate 10 blocks
+        
+        # Blocks that block light (solid blocks that aren't passable)
+        def blocks_light(tile_x, tile_y):
+            """Check if a block blocks light."""
+            if not (0 <= tile_x < self.world.width and 0 <= tile_y < self.world.height):
+                return True
+            bt = self.world.get_block(tile_x, tile_y)
+            if bt in (BlockType.AIR, BlockType.WOOD, BlockType.LEAVES, BlockType.TORCH, BlockType.PLATFORM):
+                return False
+            if bt == BlockType.DOOR and (tile_x, tile_y) in self.world.open_doors:
+                return False
+            return self.world.is_solid(tile_x, tile_y)
+        
+        def has_line_of_sight_fast(src_tile_x, src_tile_y, dst_tile_x, dst_tile_y):
+            """Fast tile-level line of sight check. Returns True if clear path."""
+            dx = dst_tile_x - src_tile_x
+            dy = dst_tile_y - src_tile_y
+            
+            # Manhattan distance early check
+            if abs(dx) + abs(dy) > 15:  # Max reasonable distance
+                return False
+            
+            # Bresenham-like raycast at tile level
+            steps = max(abs(dx), abs(dy))
+            if steps == 0:
+                return True
+            
+            step_x = dx / steps if steps > 0 else 0
+            step_y = dy / steps if steps > 0 else 0
+            
+            for i in range(1, steps):
+                check_x = int(src_tile_x + step_x * i)
+                check_y = int(src_tile_y + step_y * i)
+                if blocks_light(check_x, check_y):
+                    return False
+            return True
+        
+        def get_surface_height(tile_x):
+            """Get the Y coordinate of the surface (first solid block from top) at tile_x."""
+            for ty in range(self.world.height):
+                bt = self.world.get_block(tile_x, ty)
+                if bt not in (BlockType.AIR, BlockType.WOOD, BlockType.LEAVES, BlockType.TORCH, BlockType.PLATFORM):
+                    if self.world.is_solid(tile_x, ty):
+                        return ty
+            return self.world.height
+        
+        # Find torches in visible area (cached list)
+        torch_light_radius_blocks = torch_light_radius
+        visible_left = int(self.camera.x // TILE_SIZE) - torch_light_radius_blocks - 1
+        visible_right = int((self.camera.x + SCREEN_WIDTH / self.camera.zoom) // TILE_SIZE) + torch_light_radius_blocks + 1
+        visible_top = int(self.camera.y // TILE_SIZE) - torch_light_radius_blocks - 1
+        visible_bottom = int((self.camera.y + SCREEN_HEIGHT / self.camera.zoom) // TILE_SIZE) + torch_light_radius_blocks + 1
+        
+        torches = []
+        for tx in range(max(0, visible_left), min(self.world.width, visible_right)):
+            for ty in range(max(0, visible_top), min(self.world.height, visible_bottom)):
+                if self.world.get_block(tx, ty) == BlockType.TORCH:
+                    torches.append((tx, ty))
+        
+        # Cache surface heights
+        surface_heights = {}
+        
+        # Process at TILE level (32x32 pixels) - major optimization!
+        # Step by TILE_SIZE/4 = 8 pixels for balance of quality/performance
+        tile_step = 8  # Process every 8 pixels (1/4 tile)
+        
+        for screen_y in range(0, SCREEN_HEIGHT, tile_step):
+            for screen_x in range(0, SCREEN_WIDTH, tile_step):
+                world_x, world_y = self.camera.screen_to_world(screen_x, screen_y)
+                tile_x = int(world_x // TILE_SIZE)
+                tile_y = int(world_y // TILE_SIZE)
+                
+                # Calculate base darkness
+                darkness = 0
+                
+                # Get surface height for this column
+                if tile_x not in surface_heights:
+                    surface_heights[tile_x] = get_surface_height(tile_x)
+                surface_tile_y = surface_heights[tile_x]
+                
+                # === BASE DARKNESS (different for day/night) ===
+                if not self.is_night:
+                    # Daytime: Sun provides natural light from above
+                    # Surface and above are well-lit, underground gets progressively darker
+                    if tile_y < surface_tile_y:
+                        # Above ground - well lit by sun
+                        darkness = 0
+                    else:
+                        # Underground - darkness increases with depth
+                        depth = tile_y - surface_tile_y
+                        max_depth = 10
+                        t = min(depth / max_depth, 1.0)
+                        darkness = int(200 * t)
+                else:
+                    # Nighttime: Dark everywhere
+                    if tile_y < surface_tile_y:
+                        # Above ground - dark but not pitch black
+                        darkness = 150
+                    else:
+                        # Underground - even darker
+                        depth = tile_y - surface_tile_y
+                        max_depth = 8
+                        t = min(depth / max_depth, 1.0)
+                        darkness = int(180 + 40 * t)
+                
+                # === LIGHT SOURCES (reduce darkness) ===
+                light_level = 0.0
+                
+                # Player light (simple distance check first, then LOS if close)
+                player_dist = math.sqrt((world_x - player_center_x)**2 + (world_y - player_center_y)**2)
+                player_max_dist = player_light_radius * TILE_SIZE
+                
+                if player_dist < player_max_dist:
+                    player_tile_x = int(player_center_x // TILE_SIZE)
+                    player_tile_y = int(player_center_y // TILE_SIZE)
+                    if has_line_of_sight_fast(player_tile_x, player_tile_y, tile_x, tile_y):
+                        if player_dist < player_max_dist * 0.4:
+                            intensity = 1.0 - (player_dist / player_max_dist) * 0.3
+                        else:
+                            intensity = 1.0 - (player_dist / player_max_dist)
+                        light_level = max(light_level, intensity)
+                
+                # Torch lights
+                for torch_tile_x, torch_tile_y in torches:
+                    torch_world_x = torch_tile_x * TILE_SIZE + TILE_SIZE / 2
+                    torch_world_y = torch_tile_y * TILE_SIZE + TILE_SIZE / 2
+                    torch_dist = math.sqrt((world_x - torch_world_x)**2 + (world_y - torch_world_y)**2)
+                    torch_max_dist = torch_light_radius * TILE_SIZE
+                    
+                    if torch_dist < torch_max_dist:
+                        if has_line_of_sight_fast(torch_tile_x, torch_tile_y, tile_x, tile_y):
+                            if torch_dist < torch_max_dist * 0.3:
+                                light_level = max(light_level, 1.0)
+                            else:
+                                intensity = 1.0 - (torch_dist - torch_max_dist * 0.3) / (torch_max_dist * 0.7)
+                                light_level = max(light_level, intensity)
+                
+                # Apply light level to reduce darkness
+                if light_level > 0:
+                    darkness = int(darkness * (1.0 - light_level))
+                
+                if darkness > 0:
+                    pygame.draw.rect(darkness_surface, (0, 0, 0, darkness), (screen_x, screen_y, tile_step, tile_step))
+        
+        # Blit the darkness overlay
+        self.screen.blit(darkness_surface, (0, 0))
 
     def _draw_main_menu(self):
         """Draw the main menu with Play and Quit buttons."""

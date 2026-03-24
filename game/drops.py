@@ -7,7 +7,7 @@ from game.constants import (
     DROP_SIZE, DROP_COLLECT_RANGE, DROP_BOB_SPEED, DROP_BOB_AMOUNT,
     TILE_SIZE, YELLOW, GRAVITY, MAX_FALL_SPEED, LEAVES_COLOR
 )
-from game.blocks import get_item_color, get_item_name, is_block_solid, is_tool
+from game.blocks import get_item_color, get_item_name, is_block_solid, is_tool, ToolType, BlockType
 
 
 class Particle:
@@ -236,30 +236,54 @@ class DroppedItem:
             center_x = int(screen_x)
             center_y = int(screen_y)
             handle_color = (80, 50, 20)
-            if self.block_type.__name__ == 'SWORD':
+            if self.block_type == ToolType.SWORD:
                 # Draw sword blade
                 pygame.draw.line(surface, (200, 200, 220), 
                                (center_x, center_y - int(scaled_size//3)),
                                (center_x, center_y + int(scaled_size//3)), 
                                max(1, int(scaled_size//4)))
-            elif self.block_type.__name__ == 'PICKAXE':
+            elif self.block_type == ToolType.PICKAXE:
                 # Draw pickaxe head
                 pygame.draw.line(surface, (150, 150, 160),
                                (center_x - int(scaled_size//3), center_y - int(scaled_size//4)),
                                (center_x + int(scaled_size//3), center_y - int(scaled_size//4)),
                                max(1, int(scaled_size//5)))
-            elif self.block_type.__name__ == 'AXE':
+            elif self.block_type == ToolType.AXE:
                 # Draw axe head
                 pygame.draw.polygon(surface, (100, 70, 40), [
                     (center_x + int(scaled_size//4), center_y - int(scaled_size//3)),
                     (center_x + int(scaled_size//3), center_y),
                     (center_x + int(scaled_size//4), center_y + int(scaled_size//4)),
                 ])
-            elif self.block_type.__name__ == 'SHOVEL':
+            elif self.block_type == ToolType.SHOVEL:
                 # Draw shovel head
                 pygame.draw.ellipse(surface, (150, 150, 160),
                                   (center_x - int(scaled_size//5), center_y - int(scaled_size//3),
                                    int(scaled_size//2.5), int(scaled_size//2)))
+            elif self.block_type == ToolType.BOW:
+                # Draw bow shape
+                pygame.draw.arc(surface, (139, 90, 43),
+                              (center_x - int(scaled_size//3), center_y - int(scaled_size//2),
+                               int(scaled_size*2//3), int(scaled_size)),
+                              -1.5, 1.5, max(1, int(scaled_size//6)))
+        
+        # Draw platform-specific details
+        elif self.block_type == BlockType.PLATFORM:
+            # Draw as thin horizontal plank
+            platform_color = (160, 120, 60)
+            platform_height = max(2, int(scaled_size // 4))
+            platform_rect = pygame.Rect(
+                int(screen_x - scaled_size // 2),
+                int(screen_y - scaled_size // 2),
+                int(scaled_size),
+                platform_height
+            )
+            pygame.draw.rect(surface, platform_color, platform_rect)
+            # Wood grain
+            grain_color = (130, 90, 40)
+            pygame.draw.line(surface, grain_color,
+                           (int(screen_x - scaled_size // 2), int(screen_y - scaled_size // 2 + platform_height // 2)),
+                           (int(screen_x + scaled_size // 2), int(screen_y - scaled_size // 2 + platform_height // 2)), 1)
 
         # Draw yellow border if hovered
         if self.hovered:
