@@ -21,10 +21,10 @@ GAME_STATE_PAUSED = "paused"
 from game.player import Player
 from game.world import World
 from game.camera import Camera
-from game.drops import DropManager, ParticleManager, ArrowManager
+from game.drops import DropManager, ParticleManager, ArrowManager, StarDropManager
 from game.inventory import Inventory
 from game.enemy import EnemyManager
-from game.blocks import get_break_time, get_break_time_with_tool, get_block_name, get_item_name, is_block_breakable, BlockType, ToolType, ItemType, is_tool, get_tool_damage
+from game.blocks import get_break_time, get_break_time_with_tool, get_block_name, get_item_name, is_block_breakable, BlockType, ToolType, ItemType, is_tool, is_armor, is_star, is_sword, get_tool_damage
 
 
 class Game:
@@ -50,6 +50,7 @@ class Game:
         self.particle_manager = None
         self.inventory = None
         self.enemy_manager = None
+        self.star_drop_manager = None
         
         # Breaking state
         self.breaking_tile = None  # (tile_x, tile_y)
@@ -71,6 +72,11 @@ class Game:
         self.player_max_health = 10
         self.player_damage_cooldown = 0.0
         
+        # Player mana system
+        self.player_mana = 10
+        self.player_max_mana = 10
+        self.mana_consumption_cooldown = 0.0
+        
         # Bow charging
         self.bow_charge_start = 0.0  # Time when bow started charging
         self.bow_charging = False
@@ -85,7 +91,39 @@ class Game:
         self.play_button_rect = None
         self.quit_button_rect = None
         self.resume_button_rect = None
+        self.settings_button_rect = None
+        self.settings_back_button_rect = None
+        self.screen_size_small_rect = None
+        self.screen_size_medium_rect = None
+        self.screen_size_large_rect = None
+        
+        # Settings state
+        self.showing_settings = False
+        self.current_screen_size = "medium"  # small, medium, large
 
+    def _change_screen_size(self, size):
+        """Change the screen size."""
+        self.current_screen_size = size
+        
+        # Update constants
+        from game import constants
+        if size == "small":
+            constants.SCREEN_WIDTH = 800
+            constants.SCREEN_HEIGHT = 600
+        elif size == "medium":
+            constants.SCREEN_WIDTH = 1200
+            constants.SCREEN_HEIGHT = 800
+        elif size == "large":
+            constants.SCREEN_WIDTH = 1600
+            constants.SCREEN_HEIGHT = 900
+        
+        # Recreate the screen with new size
+        self.screen = pygame.display.set_mode((constants.SCREEN_WIDTH, constants.SCREEN_HEIGHT))
+        
+        # Recreate overlay surfaces
+        self.lighting_overlay = pygame.Surface((constants.SCREEN_WIDTH, constants.SCREEN_HEIGHT), pygame.SRCALPHA)
+        self._lighting_cache = None
+    
     def _start_game(self):
         """Initialize and start a new game."""
         self.world = World()
@@ -101,6 +139,7 @@ class Game:
         self.arrow_manager = ArrowManager()
         self.inventory = Inventory()
         self.enemy_manager = EnemyManager()
+        self.star_drop_manager = StarDropManager()
         
         # Initialize starting tools in slots 1-5
         self.inventory.hotbar[0] = (ToolType.SWORD, 1)
@@ -125,12 +164,29 @@ class Game:
             # Handle MENU state
             elif self.game_state == GAME_STATE_MENU:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.play_button_rect and self.play_button_rect.collidepoint(mouse_pos):
-                        self._start_game()
-                    elif self.quit_button_rect and self.quit_button_rect.collidepoint(mouse_pos):
-                        self.running = False
+                    if self.showing_settings:
+                        # Settings screen buttons
+                        if self.settings_back_button_rect and self.settings_back_button_rect.collidepoint(mouse_pos):
+                            self.showing_settings = False
+                        elif self.screen_size_small_rect and self.screen_size_small_rect.collidepoint(mouse_pos):
+                            self._change_screen_size("small")
+                        elif self.screen_size_medium_rect and self.screen_size_medium_rect.collidepoint(mouse_pos):
+                            self._change_screen_size("medium")
+                        elif self.screen_size_large_rect and self.screen_size_large_rect.collidepoint(mouse_pos):
+                            self._change_screen_size("large")
+                    else:
+                        # Main menu buttons
+                        if self.play_button_rect and self.play_button_rect.collidepoint(mouse_pos):
+                            self._start_game()
+                        elif self.settings_button_rect and self.settings_button_rect.collidepoint(mouse_pos):
+                            self.showing_settings = True
+                        elif self.quit_button_rect and self.quit_button_rect.collidepoint(mouse_pos):
+                            self.running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    self.running = False
+                    if self.showing_settings:
+                        self.showing_settings = False
+                    else:
+                        self.running = False
             
             # Handle PAUSED state
             elif self.game_state == GAME_STATE_PAUSED:
@@ -180,9 +236,9 @@ class Game:
                             if hotbar_slot >= 0:
                                 self.inventory.handle_click(*mouse_pos, 1)
                             else:
-                                # Check if sword is selected
+                                # Check if any sword is selected
                                 selected_item = self.inventory.get_selected_item()
-                                if selected_item is not None and selected_item[0] == ToolType.SWORD:
+                                if selected_item is not None and is_sword(selected_item[0]):
                                     # Swing sword
                                     self._swing_sword()
                                 else:
@@ -208,9 +264,20 @@ class Game:
                             self._shoot_bow()
                             self.bow_charging = False
                 elif event.type == pygame.MOUSEWHEEL:
-                    # Mouse wheel for inventory selection
+                    # Mouse wheel for inventory selection or crafting panel scroll
                     # event.y is 1 for scroll up, -1 for scroll down
-                    self.inventory.scroll_selection(-event.y)
+                    if self.inventory.is_open:
+                        # Check if mouse is over crafting panel area (left side)
+                        if mouse_pos[0] < 220:  # Crafting panel is on the left
+                            # Scroll crafting panel
+                            self.inventory.craft_scroll = max(0, 
+                                min(len(self.inventory.craftable_items) - self.inventory.craft_max_visible,
+                                    self.inventory.craft_scroll - event.y))
+                        else:
+                            # Scroll inventory selection
+                            self.inventory.scroll_selection(-event.y)
+                    else:
+                        self.inventory.scroll_selection(-event.y)
 
         # Update hover states for drops (world coordinates) - only in playing
         if self.game_state == GAME_STATE_PLAYING and self.camera and self.drop_manager:
@@ -275,8 +342,21 @@ class Game:
         if self.sword_swing_active:
             return  # Already swinging
         
+        # Get sword stats from tool data
+        from game.blocks import get_tool_speed
+        selected_item = self.inventory.get_selected_item()
+        swing_duration = SWORD_SWING_DURATION  # Default duration
+        sword_damage = SWORD_DAMAGE  # Default damage
+        
+        if selected_item is not None and is_tool(selected_item[0]):
+            sword_damage = get_tool_damage(selected_item[0])
+            # Faster swing for high-speed tools (gold sword has 1.8x speed)
+            speed_mult = get_tool_speed(selected_item[0])
+            swing_duration = SWORD_SWING_DURATION / speed_mult
+        
         self.sword_swing_active = True
-        self.sword_swing_timer = SWORD_SWING_DURATION
+        self.sword_swing_timer = swing_duration
+        self.sword_swing_duration = swing_duration  # Store for animation scaling
         self.sword_swing_angle = 0.0
         
         # Get player center
@@ -296,12 +376,6 @@ class Game:
         dx = world_x - swing_origin_x
         dy = world_y - swing_origin_y
         self.sword_swing_angle = math.atan2(dy, dx)
-        
-        # Get sword damage from tool stats
-        selected_item = self.inventory.get_selected_item()
-        sword_damage = SWORD_DAMAGE  # Default damage
-        if selected_item is not None and is_tool(selected_item[0]):
-            sword_damage = get_tool_damage(selected_item[0])
         
         # Check for enemy hits
         hit_enemies = self.enemy_manager.check_sword_hit(
@@ -479,8 +553,11 @@ class Game:
 
         block_type, count = selected
 
-        # Can't place tools or arrows as blocks
-        if is_tool(block_type) or block_type == ItemType.ARROW:
+        # Can't place tools, armor, stars, or arrows as blocks (they are items, not blocks)
+        if is_tool(block_type) or is_armor(block_type) or is_star(block_type) or block_type == ItemType.ARROW:
+            # Special case: Blue star can be consumed to increase mana
+            if block_type == BlockType.BLUE_STAR:
+                self._consume_blue_star()
             return
 
         # Special handling for doors (3 blocks tall)
@@ -619,6 +696,22 @@ class Game:
         # Update particles
         self.particle_manager.update(dt)
         
+        # Update falling stars
+        if self.star_drop_manager:
+            self.star_drop_manager.update(dt, self.world, self.camera, self.is_night, 
+                                         self.particle_manager, self.drop_manager)
+        
+        # Update mana consumption cooldown
+        if self.mana_consumption_cooldown > 0:
+            self.mana_consumption_cooldown -= dt
+        
+        # Make existing yellow star drops vanish at day time
+        if not self.is_night:
+            for drop in self.drop_manager.drops[:]:
+                if drop.block_type == BlockType.YELLOW_STAR:
+                    # Vanish effect - just remove for now (could add particle effect)
+                    self.drop_manager.remove_drop(drop)
+        
         # Update arrows
         all_enemies = self.enemy_manager.enemies + self.enemy_manager.flying_eyes
         self.arrow_manager.update(dt, self.world, all_enemies)
@@ -633,9 +726,13 @@ class Game:
             damage_to_player = result
             player_drag = None
         
-        # Apply damage to player
+        # Apply damage to player (reduced by defense)
         if damage_to_player > 0 and self.player_damage_cooldown <= 0:
-            self.player_health -= damage_to_player
+            # Calculate defense from equipped armor
+            defense = self.inventory.get_total_defense()
+            # Reduce damage by defense, but minimum 1 damage
+            reduced_damage = max(1, damage_to_player - defense)
+            self.player_health -= reduced_damage
             self.player_damage_cooldown = 1.0  # 1 second cooldown
             
             # Apply player drag if hit by flying eye (using velocity/force, not teleport)
@@ -812,14 +909,18 @@ class Game:
         # Draw particles
         self.particle_manager.draw(self.screen, self.camera)
         
+        # Draw falling stars
+        if self.star_drop_manager:
+            self.star_drop_manager.draw(self.screen, self.camera, self.is_night)
+        
         # Draw arrows
         self.arrow_manager.draw(self.screen, self.camera)
         
         # Draw enemies
         self.enemy_manager.draw(self.screen, self.camera)
 
-        # Draw player
-        self.player.draw(self.screen, self.camera)
+        # Draw player with armor from inventory
+        self.player.draw(self.screen, self.camera, armor=self.inventory.armor)
         
         # Draw sword swing
         if self.sword_swing_active:
@@ -851,6 +952,9 @@ class Game:
 
         # Draw player health bar
         self._draw_health_bar()
+
+        # Draw player mana bar
+        self._draw_mana_bar()
 
         # Draw HUD / instructions
         self._draw_hud()
@@ -940,9 +1044,11 @@ class Game:
                 return (r, g, b)
     
     def _draw_sword_swing(self):
-        """Draw the sword swing animation."""
+        """Draw the sword swing animation with different effects for different swords."""
         # Calculate sword position based on swing progress
-        progress = 1.0 - (self.sword_swing_timer / SWORD_SWING_DURATION)
+        # Use stored duration for dynamic swing speeds (gold sword is faster)
+        swing_duration = getattr(self, 'sword_swing_duration', SWORD_SWING_DURATION)
+        progress = 1.0 - (self.sword_swing_timer / swing_duration)
         
         # Swing arc from -60 to +60 degrees around the swing angle
         swing_offset = (progress - 0.5) * math.pi  # -90 to +90 degrees
@@ -966,6 +1072,23 @@ class Game:
         screen_center_x, screen_center_y = self.camera.world_to_screen(swing_origin_x, swing_origin_y)
         screen_tip_x, screen_tip_y = self.camera.world_to_screen(tip_x, tip_y)
         
+        # Determine sword type and colors
+        selected_item = self.inventory.get_selected_item()
+        sword_type = selected_item[0] if selected_item else ToolType.SWORD
+        
+        if sword_type == ToolType.GOLD_SWORD:
+            # Gold sword - gold/yellow trail
+            trail_color = (255, 215, 0)  # Gold
+            blade_color = (255, 235, 100)  # Light gold
+        elif sword_type == ToolType.IRON_SWORD:
+            # Iron sword - silver/white trail with sparkle (same base as default but will add particles)
+            trail_color = (220, 220, 240)  # Silver-white
+            blade_color = (240, 240, 255)  # Bright silver
+        else:
+            # Default sword - silver/gray trail
+            trail_color = (200, 200, 220)
+            blade_color = (220, 220, 230)
+        
         # Draw sword slash trail
         trail_width = max(2, int(8 * self.camera.zoom))
         
@@ -981,18 +1104,67 @@ class Game:
             x2 = screen_center_x + math.cos(angle2) * sword_length * self.camera.zoom
             y2 = screen_center_y + math.sin(angle2) * sword_length * self.camera.zoom
             
-            # Draw arc
-            pygame.draw.line(self.screen, (200, 200, 220), 
+            # Draw arc with sword-specific color
+            pygame.draw.line(self.screen, trail_color, 
                            (int(screen_center_x), int(screen_center_y)),
                            (int(x1), int(y1)), trail_width - i)
-            pygame.draw.line(self.screen, (200, 200, 220), 
+            pygame.draw.line(self.screen, trail_color, 
                            (int(screen_center_x), int(screen_center_y)),
                            (int(x2), int(y2)), trail_width - i)
         
         # Draw sword blade
-        pygame.draw.line(self.screen, (220, 220, 230),
+        pygame.draw.line(self.screen, blade_color,
                         (int(screen_center_x), int(screen_center_y)),
                         (int(screen_tip_x), int(screen_tip_y)), trail_width)
+        
+        # Iron sword - add extra sparkle particles
+        if sword_type == ToolType.IRON_SWORD and self.particle_manager:
+            # Spawn sparkle particles along the swing arc
+            if random.random() < 0.3:  # 30% chance per frame
+                # Random position along the arc
+                spark_angle = current_angle + random.uniform(-0.3, 0.3)
+                spark_dist = random.uniform(20, sword_length * self.camera.zoom)
+                spark_x = screen_center_x + math.cos(spark_angle) * spark_dist
+                spark_y = screen_center_y + math.sin(spark_angle) * spark_dist
+                
+                # Create a small white sparkle particle
+                from game.drops import Particle
+                particle = Particle(
+                    self.camera.screen_to_world(int(spark_x), int(spark_y))[0],
+                    self.camera.screen_to_world(int(spark_x), int(spark_y))[1],
+                    (255, 255, 255),
+                    size=random.randint(2, 4),
+                    lifetime=random.uniform(0.2, 0.5)
+                )
+                particle.vx = random.uniform(-1, 1)
+                particle.vy = random.uniform(-1, 1)
+                self.particle_manager.particles.append(particle)
+    
+    def _consume_blue_star(self):
+        """Consume a blue star to increase mana limit by 5."""
+        if self.mana_consumption_cooldown > 0:
+            return
+        
+        # Check if we have a blue star selected
+        selected = self.inventory.get_selected_item()
+        if selected is None or selected[0] != BlockType.BLUE_STAR:
+            return
+        
+        # Consume the star
+        self.inventory.remove_item(self.inventory.selected_slot, 1)
+        
+        # Increase max mana by 5
+        self.player_max_mana += 5
+        self.player_mana = self.player_max_mana  # Refill mana to new max
+        
+        # Set cooldown
+        self.mana_consumption_cooldown = 0.5
+        
+        # Spawn consumption effect particles
+        if self.particle_manager:
+            player_center_x = self.player.x + self.player.width / 2
+            player_center_y = self.player.y + self.player.height / 2
+            self.particle_manager.spawn_star_impact(player_center_x, player_center_y)
     
     def _draw_health_bar(self):
         """Draw player health bar."""
@@ -1019,6 +1191,32 @@ class Game:
         font = pygame.font.SysFont(None, 18)
         health_text = font.render(f"HP: {self.player_health}/{self.player_max_health}", True, WHITE)
         self.screen.blit(health_text, (bar_x + 5, bar_y + 3))
+
+    def _draw_mana_bar(self):
+        """Draw player mana bar next to health bar."""
+        bar_width = 200
+        bar_height = 20
+        bar_x = 10
+        bar_y = SCREEN_HEIGHT - 35  # Below health bar
+        
+        # Background
+        pygame.draw.rect(self.screen, (50, 50, 50),
+                        (bar_x, bar_y, bar_width, bar_height))
+        
+        # Mana fill (blue color)
+        mana_width = int(bar_width * (self.player_mana / self.player_max_mana))
+        mana_color = (50, 100, 255)  # Blue
+        pygame.draw.rect(self.screen, mana_color,
+                        (bar_x, bar_y, mana_width, bar_height))
+        
+        # Border
+        pygame.draw.rect(self.screen, WHITE,
+                        (bar_x, bar_y, bar_width, bar_height), 2)
+        
+        # Mana text
+        font = pygame.font.SysFont(None, 18)
+        mana_text = font.render(f"MP: {self.player_mana}/{self.player_max_mana}", True, WHITE)
+        self.screen.blit(mana_text, (bar_x + 5, bar_y + 3))
 
     def _draw_breaking_progress(self):
         """Draw breaking progress bar and cracking animation on the block being broken."""
@@ -1249,13 +1447,6 @@ class Game:
             enemy_count = font.render(f"Enemies: {len(self.enemy_manager.enemies)}", True, (255, 100, 100))
             self.screen.blit(enemy_count, (SCREEN_WIDTH - 100, 65))
         
-        # Show UFO mode indicator
-        if self.player.ufo_mode:
-            ufo_text = pygame.font.SysFont(None, 28).render("UFO MODE (R to exit)", True, (0, 255, 255))
-            ufo_rect = ufo_text.get_rect(center=(SCREEN_WIDTH // 2, 30))
-            pygame.draw.rect(self.screen, (0, 50, 80), ufo_rect.inflate(20, 10))
-            self.screen.blit(ufo_text, ufo_rect)
-
         # Instructions at bottom
         if self.inventory.is_open:
             text = font.render("Tab: Close Inventory | Drag items to rearrange", True, WHITE)
@@ -1312,13 +1503,32 @@ class Game:
         - Torches: 10 block radius with line-of-sight shadows (don't illuminate behind solid blocks).
         - Player: Emits light in a radius (smaller during day, larger at night).
         
-        Optimizations:
-        - Process at tile level (32x32) not per-pixel - reduces work by 64x
-        - Pre-compute light map per light source, then composite
-        - Raycast at tile granularity, not half-tile
-        - Only raycast for tiles within light radius (early skip)
+        Performance optimizations:
+        - Process at half-tile resolution (16px steps) - 4x fewer iterations
+        - Cache lighting surface, only recalculate when player/camera moves > 1 tile
+        - Early distance check before LOS raycast
+        - Torch list cached per frame
         """
-        # Get player center in world coordinates
+        # === LIGHTING CACHE ===
+        # Only recalculate if player or camera moved significantly
+        player_tile = (int(self.player.x // TILE_SIZE), int(self.player.y // TILE_SIZE))
+        camera_tile = (int(self.camera.x // TILE_SIZE), int(self.camera.y // TILE_SIZE))
+        is_night = self.is_night
+        
+        cache_valid = (
+            hasattr(self, '_lighting_cache') and
+            self._lighting_cache is not None and
+            getattr(self, '_lighting_cache_player_tile', None) == player_tile and
+            getattr(self, '_lighting_cache_camera_tile', None) == camera_tile and
+            getattr(self, '_lighting_cache_is_night', None) == is_night
+        )
+        
+        if cache_valid:
+            # Use cached surface
+            self.screen.blit(self._lighting_cache, (0, 0))
+            return
+        
+        # === RECALCULATE LIGHTING ===
         player_center_x = self.player.x + self.player.width / 2
         player_center_y = self.player.y + self.player.height / 2
         
@@ -1326,7 +1536,7 @@ class Game:
         darkness_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         
         # Light source radii (in blocks)
-        player_light_radius = LIGHT_RADIUS_NIGHT if self.is_night else LIGHT_RADIUS_DAY
+        player_light_radius = LIGHT_RADIUS_NIGHT if is_night else LIGHT_RADIUS_DAY
         torch_light_radius = 10  # Torches illuminate 10 blocks
         
         # Blocks that block light (solid blocks that aren't passable)
@@ -1335,7 +1545,9 @@ class Game:
             if not (0 <= tile_x < self.world.width and 0 <= tile_y < self.world.height):
                 return True
             bt = self.world.get_block(tile_x, tile_y)
-            if bt in (BlockType.AIR, BlockType.WOOD, BlockType.LEAVES, BlockType.TORCH, BlockType.PLATFORM):
+            # Passable blocks that don't block light
+            if bt in (BlockType.AIR, BlockType.WOOD, BlockType.LEAVES, BlockType.TORCH, 
+                      BlockType.PLATFORM, BlockType.YELLOW_STAR, BlockType.BLUE_STAR):
                 return False
             if bt == BlockType.DOOR and (tile_x, tile_y) in self.world.open_doors:
                 return False
@@ -1346,8 +1558,9 @@ class Game:
             dx = dst_tile_x - src_tile_x
             dy = dst_tile_y - src_tile_y
             
-            # Manhattan distance early check
-            if abs(dx) + abs(dy) > 15:  # Max reasonable distance
+            # Manhattan distance early check - increased for torch radius 10 blocks
+            # Diagonal distance for 10 blocks can be up to ~14 tiles, so use 20 for safety
+            if abs(dx) + abs(dy) > 20:
                 return False
             
             # Bresenham-like raycast at tile level
@@ -1365,11 +1578,37 @@ class Game:
                     return False
             return True
         
+        def smoothstep(edge0, edge1, x):
+            """Smooth Hermite interpolation between edge0 and edge1."""
+            t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+            return t * t * (3.0 - 2.0 * t)
+        
+        def calculate_light_intensity(dist, max_dist, inner_radius=0.3):
+            """Calculate smooth light intensity based on distance.
+            
+            Uses smoothstep for natural falloff:
+            - Full brightness within inner_radius
+            - Smooth falloff to edge
+            """
+            if dist >= max_dist:
+                return 0.0
+            
+            normalized_dist = dist / max_dist
+            
+            # Full brightness in inner radius, smooth falloff outside
+            if normalized_dist < inner_radius:
+                return 1.0
+            else:
+                # Smooth falloff from inner_radius to 1.0
+                t = (normalized_dist - inner_radius) / (1.0 - inner_radius)
+                return 1.0 - smoothstep(0.0, 1.0, t)
+        
         def get_surface_height(tile_x):
             """Get the Y coordinate of the surface (first solid block from top) at tile_x."""
             for ty in range(self.world.height):
                 bt = self.world.get_block(tile_x, ty)
-                if bt not in (BlockType.AIR, BlockType.WOOD, BlockType.LEAVES, BlockType.TORCH, BlockType.PLATFORM):
+                if bt not in (BlockType.AIR, BlockType.WOOD, BlockType.LEAVES, BlockType.TORCH, 
+                              BlockType.PLATFORM, BlockType.YELLOW_STAR, BlockType.BLUE_STAR):
                     if self.world.is_solid(tile_x, ty):
                         return ty
             return self.world.height
@@ -1390,18 +1629,24 @@ class Game:
         # Cache surface heights
         surface_heights = {}
         
-        # Process at TILE level (32x32 pixels) - major optimization!
-        # Step by TILE_SIZE/4 = 8 pixels for balance of quality/performance
-        tile_step = 8  # Process every 8 pixels (1/4 tile)
+        # === IMPROVED LIGHTING WITH SMOOTH FALLOFF ===
+        # Use smaller step for better quality, with bilinear interpolation
+        grid_step = 16  # Light grid resolution (16px = half tile)
         
-        for screen_y in range(0, SCREEN_HEIGHT, tile_step):
-            for screen_x in range(0, SCREEN_WIDTH, tile_step):
+        # Create a lower-resolution light grid for interpolation
+        grid_width = (SCREEN_WIDTH // grid_step) + 2
+        grid_height = (SCREEN_HEIGHT // grid_step) + 2
+        light_grid = [[0.0 for _ in range(grid_height)] for _ in range(grid_width)]
+        base_darkness_grid = [[0 for _ in range(grid_height)] for _ in range(grid_width)]
+        
+        # Fill the light grid with base darkness values
+        for grid_x in range(grid_width):
+            for grid_y in range(grid_height):
+                screen_x = grid_x * grid_step
+                screen_y = grid_y * grid_step
                 world_x, world_y = self.camera.screen_to_world(screen_x, screen_y)
                 tile_x = int(world_x // TILE_SIZE)
                 tile_y = int(world_y // TILE_SIZE)
-                
-                # Calculate base darkness
-                darkness = 0
                 
                 # Get surface height for this column
                 if tile_x not in surface_heights:
@@ -1409,34 +1654,30 @@ class Game:
                 surface_tile_y = surface_heights[tile_x]
                 
                 # === BASE DARKNESS (different for day/night) ===
-                if not self.is_night:
+                base_darkness = 0
+                if not is_night:
                     # Daytime: Sun provides natural light from above
-                    # Surface and above are well-lit, underground gets progressively darker
                     if tile_y < surface_tile_y:
-                        # Above ground - well lit by sun
-                        darkness = 0
+                        base_darkness = 0
                     else:
-                        # Underground - darkness increases with depth
                         depth = tile_y - surface_tile_y
                         max_depth = 10
                         t = min(depth / max_depth, 1.0)
-                        darkness = int(200 * t)
+                        base_darkness = int(200 * t)
                 else:
                     # Nighttime: Dark everywhere
                     if tile_y < surface_tile_y:
-                        # Above ground - dark but not pitch black
-                        darkness = 150
+                        base_darkness = 150
                     else:
-                        # Underground - even darker
                         depth = tile_y - surface_tile_y
                         max_depth = 8
                         t = min(depth / max_depth, 1.0)
-                        darkness = int(180 + 40 * t)
+                        base_darkness = int(180 + 40 * t)
                 
-                # === LIGHT SOURCES (reduce darkness) ===
+                base_darkness_grid[grid_x][grid_y] = base_darkness
                 light_level = 0.0
                 
-                # Player light (simple distance check first, then LOS if close)
+                # Player light with smooth falloff
                 player_dist = math.sqrt((world_x - player_center_x)**2 + (world_y - player_center_y)**2)
                 player_max_dist = player_light_radius * TILE_SIZE
                 
@@ -1444,13 +1685,10 @@ class Game:
                     player_tile_x = int(player_center_x // TILE_SIZE)
                     player_tile_y = int(player_center_y // TILE_SIZE)
                     if has_line_of_sight_fast(player_tile_x, player_tile_y, tile_x, tile_y):
-                        if player_dist < player_max_dist * 0.4:
-                            intensity = 1.0 - (player_dist / player_max_dist) * 0.3
-                        else:
-                            intensity = 1.0 - (player_dist / player_max_dist)
+                        intensity = calculate_light_intensity(player_dist, player_max_dist, inner_radius=0.25)
                         light_level = max(light_level, intensity)
                 
-                # Torch lights
+                # Torch lights with smooth falloff
                 for torch_tile_x, torch_tile_y in torches:
                     torch_world_x = torch_tile_x * TILE_SIZE + TILE_SIZE / 2
                     torch_world_y = torch_tile_y * TILE_SIZE + TILE_SIZE / 2
@@ -1459,24 +1697,74 @@ class Game:
                     
                     if torch_dist < torch_max_dist:
                         if has_line_of_sight_fast(torch_tile_x, torch_tile_y, tile_x, tile_y):
-                            if torch_dist < torch_max_dist * 0.3:
-                                light_level = max(light_level, 1.0)
-                            else:
-                                intensity = 1.0 - (torch_dist - torch_max_dist * 0.3) / (torch_max_dist * 0.7)
-                                light_level = max(light_level, intensity)
+                            intensity = calculate_light_intensity(torch_dist, torch_max_dist, inner_radius=0.2)
+                            light_level = max(light_level, intensity)
                 
-                # Apply light level to reduce darkness
-                if light_level > 0:
-                    darkness = int(darkness * (1.0 - light_level))
+                light_grid[grid_x][grid_y] = light_level
+        
+        # === RENDER WITH BILINEAR INTERPOLATION ===
+        # Render at full resolution with smooth interpolation between grid points
+        pixel_step = 8  # Render every 8 pixels with interpolation
+        
+        for screen_y in range(0, SCREEN_HEIGHT, pixel_step):
+            for screen_x in range(0, SCREEN_WIDTH, pixel_step):
+                # Calculate grid coordinates with sub-pixel precision
+                grid_x_f = screen_x / grid_step
+                grid_y_f = screen_y / grid_step
+                grid_x = int(grid_x_f)
+                grid_y = int(grid_y_f)
+                
+                # Clamp to grid bounds
+                grid_x = max(0, min(grid_x, grid_width - 2))
+                grid_y = max(0, min(grid_y, grid_height - 2))
+                
+                # Bilinear interpolation factors
+                fx = grid_x_f - grid_x  # Fractional part x (0-1)
+                fy = grid_y_f - grid_y  # Fractional part y (0-1)
+                
+                # Get the four corner values
+                light_00 = light_grid[grid_x][grid_y]
+                light_10 = light_grid[grid_x + 1][grid_y]
+                light_01 = light_grid[grid_x][grid_y + 1]
+                light_11 = light_grid[grid_x + 1][grid_y + 1]
+                
+                dark_00 = base_darkness_grid[grid_x][grid_y]
+                dark_10 = base_darkness_grid[grid_x + 1][grid_y]
+                dark_01 = base_darkness_grid[grid_x][grid_y + 1]
+                dark_11 = base_darkness_grid[grid_x + 1][grid_y + 1]
+                
+                # Bilinear interpolation for light level
+                light_top = light_00 * (1 - fx) + light_10 * fx
+                light_bottom = light_01 * (1 - fx) + light_11 * fx
+                light_level = light_top * (1 - fy) + light_bottom * fy
+                
+                # Bilinear interpolation for base darkness
+                dark_top = dark_00 * (1 - fx) + dark_10 * fx
+                dark_bottom = dark_01 * (1 - fx) + dark_11 * fx
+                base_darkness = dark_top * (1 - fy) + dark_bottom * fy
+                
+                # Apply light to darkness
+                darkness = int(base_darkness * (1.0 - light_level))
                 
                 if darkness > 0:
-                    pygame.draw.rect(darkness_surface, (0, 0, 0, darkness), (screen_x, screen_y, tile_step, tile_step))
+                    pygame.draw.rect(darkness_surface, (0, 0, 0, darkness), 
+                                   (screen_x, screen_y, pixel_step, pixel_step))
+        
+        # Cache the result
+        self._lighting_cache = darkness_surface
+        self._lighting_cache_player_tile = player_tile
+        self._lighting_cache_camera_tile = camera_tile
+        self._lighting_cache_is_night = is_night
         
         # Blit the darkness overlay
         self.screen.blit(darkness_surface, (0, 0))
 
     def _draw_main_menu(self):
-        """Draw the main menu with Play and Quit buttons."""
+        """Draw the main menu with Play, Settings and Quit buttons."""
+        if self.showing_settings:
+            self._draw_settings_screen()
+            return
+        
         # Title
         title_text = self.title_font.render("MyArea", True, WHITE)
         title_rect = title_text.get_rect(center=(SCREEN_WIDTH // 2, 150))
@@ -1506,10 +1794,23 @@ class Game:
         play_rect = play_text.get_rect(center=self.play_button_rect.center)
         self.screen.blit(play_text, play_rect)
         
+        # Settings button
+        self.settings_button_rect = pygame.Rect(
+            (SCREEN_WIDTH - button_width) // 2,
+            button_y_start + button_spacing,
+            button_width,
+            button_height
+        )
+        pygame.draw.rect(self.screen, (80, 100, 140), self.settings_button_rect, border_radius=10)
+        pygame.draw.rect(self.screen, WHITE, self.settings_button_rect, 3, border_radius=10)
+        settings_text = self.button_font.render("Settings", True, WHITE)
+        settings_rect = settings_text.get_rect(center=self.settings_button_rect.center)
+        self.screen.blit(settings_text, settings_rect)
+        
         # Quit button
         self.quit_button_rect = pygame.Rect(
             (SCREEN_WIDTH - button_width) // 2,
-            button_y_start + button_spacing,
+            button_y_start + button_spacing * 2,
             button_width,
             button_height
         )
@@ -1520,7 +1821,85 @@ class Game:
         self.screen.blit(quit_text, quit_rect)
         
         # Instructions
-        hint_text = self.menu_font.render("Press ESC or click Quit to exit", True, (150, 150, 150))
+        hint_text = self.menu_font.render("Press ESC to exit", True, (150, 150, 150))
+        hint_rect = hint_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 60))
+        self.screen.blit(hint_text, hint_rect)
+    
+    def _draw_settings_screen(self):
+        """Draw the settings screen with screen size options."""
+        # Title
+        title_text = self.title_font.render("Settings", True, WHITE)
+        title_rect = title_text.get_rect(center=(SCREEN_WIDTH // 2, 120))
+        self.screen.blit(title_text, title_rect)
+        
+        # Screen Size label
+        size_label = self.menu_font.render("Screen Size:", True, (200, 200, 200))
+        size_label_rect = size_label.get_rect(center=(SCREEN_WIDTH // 2, 200))
+        self.screen.blit(size_label, size_label_rect)
+        
+        # Button positions
+        button_width = 180
+        button_height = 50
+        button_y = 260
+        button_spacing = 70
+        
+        # Small size button (800x600)
+        self.screen_size_small_rect = pygame.Rect(
+            (SCREEN_WIDTH - button_width) // 2,
+            button_y,
+            button_width,
+            button_height
+        )
+        small_color = (100, 160, 100) if self.current_screen_size == "small" else (80, 80, 80)
+        pygame.draw.rect(self.screen, small_color, self.screen_size_small_rect, border_radius=8)
+        pygame.draw.rect(self.screen, WHITE, self.screen_size_small_rect, 2, border_radius=8)
+        small_text = self.button_font.render("Small (800x600)", True, WHITE)
+        small_text_rect = small_text.get_rect(center=self.screen_size_small_rect.center)
+        self.screen.blit(small_text, small_text_rect)
+        
+        # Medium size button (1200x800)
+        self.screen_size_medium_rect = pygame.Rect(
+            (SCREEN_WIDTH - button_width) // 2,
+            button_y + button_spacing,
+            button_width,
+            button_height
+        )
+        medium_color = (100, 160, 100) if self.current_screen_size == "medium" else (80, 80, 80)
+        pygame.draw.rect(self.screen, medium_color, self.screen_size_medium_rect, border_radius=8)
+        pygame.draw.rect(self.screen, WHITE, self.screen_size_medium_rect, 2, border_radius=8)
+        medium_text = self.button_font.render("Medium (1200x800)", True, WHITE)
+        medium_text_rect = medium_text.get_rect(center=self.screen_size_medium_rect.center)
+        self.screen.blit(medium_text, medium_text_rect)
+        
+        # Large size button (1600x900)
+        self.screen_size_large_rect = pygame.Rect(
+            (SCREEN_WIDTH - button_width) // 2,
+            button_y + button_spacing * 2,
+            button_width,
+            button_height
+        )
+        large_color = (100, 160, 100) if self.current_screen_size == "large" else (80, 80, 80)
+        pygame.draw.rect(self.screen, large_color, self.screen_size_large_rect, border_radius=8)
+        pygame.draw.rect(self.screen, WHITE, self.screen_size_large_rect, 2, border_radius=8)
+        large_text = self.button_font.render("Large (1600x900)", True, WHITE)
+        large_text_rect = large_text.get_rect(center=self.screen_size_large_rect.center)
+        self.screen.blit(large_text, large_text_rect)
+        
+        # Back button
+        self.settings_back_button_rect = pygame.Rect(
+            (SCREEN_WIDTH - button_width) // 2,
+            button_y + button_spacing * 4,
+            button_width,
+            button_height
+        )
+        pygame.draw.rect(self.screen, (120, 60, 60), self.settings_back_button_rect, border_radius=8)
+        pygame.draw.rect(self.screen, WHITE, self.settings_back_button_rect, 2, border_radius=8)
+        back_text = self.button_font.render("Back", True, WHITE)
+        back_text_rect = back_text.get_rect(center=self.settings_back_button_rect.center)
+        self.screen.blit(back_text, back_text_rect)
+        
+        # Hint
+        hint_text = self.menu_font.render("Press ESC to go back", True, (150, 150, 150))
         hint_rect = hint_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 60))
         self.screen.blit(hint_text, hint_rect)
 

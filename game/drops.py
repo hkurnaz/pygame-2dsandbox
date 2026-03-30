@@ -5,7 +5,8 @@ import math
 import random
 from game.constants import (
     DROP_SIZE, DROP_COLLECT_RANGE, DROP_BOB_SPEED, DROP_BOB_AMOUNT,
-    TILE_SIZE, YELLOW, GRAVITY, MAX_FALL_SPEED, LEAVES_COLOR
+    TILE_SIZE, YELLOW, GRAVITY, MAX_FALL_SPEED, LEAVES_COLOR,
+    SCREEN_WIDTH
 )
 from game.blocks import get_item_color, get_item_name, is_block_solid, is_tool, ToolType, BlockType
 
@@ -95,6 +96,56 @@ class ParticleManager:
                 size=random.randint(3, 6),
                 lifetime=random.uniform(0.5, 1.5)
             )
+            self.particles.append(particle)
+
+    def spawn_star_trail(self, x, y):
+        """Spawn trail particles for falling stars."""
+        # Spawn a few small yellow particles
+        for _ in range(2):
+            px = x + random.uniform(-5, 5)
+            py = y + random.uniform(-5, 5)
+            
+            # Yellow/gold color variation
+            color = (
+                random.randint(240, 255),
+                random.randint(220, 255),
+                random.randint(50, 150)
+            )
+            
+            particle = Particle(
+                px, py, color,
+                size=random.randint(2, 4),
+                lifetime=random.uniform(0.3, 0.8)
+            )
+            # Override velocity for star trail effect
+            particle.vx = random.uniform(-1, 1)
+            particle.vy = random.uniform(-2, 0)
+            self.particles.append(particle)
+
+    def spawn_star_impact(self, x, y):
+        """Spawn impact particles when a star hits the ground."""
+        # Spawn burst of yellow particles
+        for _ in range(15):
+            px = x + random.uniform(-10, 10)
+            py = y + random.uniform(-5, 5)
+            
+            # Bright yellow/gold colors
+            color = (
+                random.randint(240, 255),
+                random.randint(200, 255),
+                random.randint(50, 150)
+            )
+            
+            particle = Particle(
+                px, py, color,
+                size=random.randint(3, 6),
+                lifetime=random.uniform(0.5, 1.5)
+            )
+            # Explosive velocity outward
+            angle = random.uniform(0, math.pi * 2)
+            speed = random.uniform(2, 6)
+            particle.vx = math.cos(angle) * speed
+            particle.vy = math.sin(angle) * speed - 3  # Initial upward burst
             self.particles.append(particle)
 
     def update(self, dt):
@@ -220,15 +271,19 @@ class DroppedItem:
         screen_x, screen_y = camera.world_to_screen(self.x, self.y)
         scaled_size = self.size * camera.zoom
 
-        # Draw the item (smaller version of block or tool)
-        color = get_item_color(self.block_type)
+        # Get item rect for hover border
         rect = pygame.Rect(
             int(screen_x - scaled_size // 2),
             int(screen_y - scaled_size // 2),
             int(scaled_size),
             int(scaled_size)
         )
-        pygame.draw.rect(surface, color, rect)
+        
+        # Skip generic rectangle for stars - they have custom rendering
+        if self.block_type not in (BlockType.YELLOW_STAR, BlockType.BLUE_STAR):
+            # Draw the item (smaller version of block or tool)
+            color = get_item_color(self.block_type)
+            pygame.draw.rect(surface, color, rect)
         
         # Draw tool-specific details if it's a tool
         if is_tool(self.block_type):
@@ -284,6 +339,83 @@ class DroppedItem:
             pygame.draw.line(surface, grain_color,
                            (int(screen_x - scaled_size // 2), int(screen_y - scaled_size // 2 + platform_height // 2)),
                            (int(screen_x + scaled_size // 2), int(screen_y - scaled_size // 2 + platform_height // 2)), 1)
+
+        # Draw star-specific visuals
+        elif self.block_type == BlockType.YELLOW_STAR:
+            # Draw 5-pointed yellow star shape
+            center_x = int(screen_x)
+            center_y = int(screen_y)
+            star_size = max(6, int(8 * camera.zoom))
+            
+            # Glow effect (soft yellow circles behind)
+            for radius in [14, 10, 6]:
+                alpha = int(80 * (radius / 14))
+                glow_surface = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surface, (255, 255, 100, alpha), (radius, radius), radius)
+                surface.blit(glow_surface, (center_x - radius, center_y - radius))
+            
+            # Draw 5-pointed star polygon
+            def get_star_points(cx, cy, outer_r, inner_r, rotation=0):
+                points = []
+                for i in range(10):
+                    angle = math.pi / 2 + i * math.pi / 5 + rotation  # Start at top
+                    radius = outer_r if i % 2 == 0 else inner_r
+                    px = cx + math.cos(angle) * radius
+                    py = cy - math.sin(angle) * radius
+                    points.append((px, py))
+                return points
+            
+            # Main yellow star
+            star_points = get_star_points(center_x, center_y, star_size, star_size // 2)
+            pygame.draw.polygon(surface, (255, 220, 50), star_points)  # Bright yellow fill
+            pygame.draw.polygon(surface, (255, 180, 0), star_points, max(1, int(camera.zoom)))  # Orange border
+            
+            # Sparkle effect
+            sparkle_time = pygame.time.get_ticks() / 500
+            for i in range(3):
+                angle = sparkle_time + i * 2.094  # 120 degrees apart
+                dist = star_size + 2
+                sx = center_x + int(math.cos(angle) * dist)
+                sy = center_y + int(math.sin(angle) * dist)
+                pygame.draw.circle(surface, (255, 255, 200), (sx, sy), max(1, int(1.5 * camera.zoom)))
+
+        elif self.block_type == BlockType.BLUE_STAR:
+            # Draw 5-pointed blue star shape
+            center_x = int(screen_x)
+            center_y = int(screen_y)
+            star_size = max(6, int(8 * camera.zoom))
+            
+            # Glow effect (soft blue circles behind)
+            for radius in [14, 10, 6]:
+                alpha = int(80 * (radius / 14))
+                glow_surface = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surface, (100, 150, 255, alpha), (radius, radius), radius)
+                surface.blit(glow_surface, (center_x - radius, center_y - radius))
+            
+            # Draw 5-pointed star polygon
+            def get_star_points(cx, cy, outer_r, inner_r, rotation=0):
+                points = []
+                for i in range(10):
+                    angle = math.pi / 2 + i * math.pi / 5 + rotation  # Start at top
+                    radius = outer_r if i % 2 == 0 else inner_r
+                    px = cx + math.cos(angle) * radius
+                    py = cy - math.sin(angle) * radius
+                    points.append((px, py))
+                return points
+            
+            # Main blue star
+            star_points = get_star_points(center_x, center_y, star_size, star_size // 2, rotation=0.314)  # Slight rotation
+            pygame.draw.polygon(surface, (100, 150, 255), star_points)  # Bright blue fill
+            pygame.draw.polygon(surface, (60, 100, 200), star_points, max(1, int(camera.zoom)))  # Darker blue border
+            
+            # Sparkle effect
+            sparkle_time = pygame.time.get_ticks() / 500
+            for i in range(3):
+                angle = sparkle_time + i * 2.094 + 1.047  # Offset from yellow star
+                dist = star_size + 2
+                sx = center_x + int(math.cos(angle) * dist)
+                sy = center_y + int(math.sin(angle) * dist)
+                pygame.draw.circle(surface, (180, 210, 255), (sx, sy), max(1, int(1.5 * camera.zoom)))
 
         # Draw yellow border if hovered
         if self.hovered:
@@ -454,3 +586,200 @@ class ArrowManager:
         """Draw all arrows."""
         for arrow in self.arrows:
             arrow.draw(surface, camera)
+
+
+class FallingStar:
+    """A falling yellow star that falls from the sky at night."""
+    
+    def __init__(self, x, y, target_x, target_y):
+        self.x = float(x)
+        self.y = float(y)
+        self.target_x = float(target_x)
+        self.target_y = float(target_y)
+        self.active = True
+        self.landed = False
+        self.vanishing = False
+        self.vanish_timer = 0.0
+        self.vanish_duration = 1.0  # Seconds to vanish
+        
+        # Calculate velocity toward target
+        dx = target_x - x
+        dy = target_y - y
+        dist = math.sqrt(dx * dx + dy * dy)
+        speed = 8.0  # Falling speed
+        if dist > 0:
+            self.vx = (dx / dist) * speed
+            self.vy = (dy / dist) * speed
+        else:
+            self.vx = 0
+            self.vy = speed
+        
+        # Trail particles
+        self.trail_timer = 0.0
+        self.trail_interval = 0.05
+        
+        # Sparkle effect
+        self.sparkle_timer = 0.0
+        self.sparkle_offset = random.uniform(0, math.pi * 2)
+    
+    def update(self, dt, world, particle_manager):
+        """Update falling star position and check for ground collision."""
+        if not self.active:
+            return None
+        
+        # Handle vanishing at day time
+        if self.vanishing:
+            self.vanish_timer -= dt
+            if self.vanish_timer <= 0:
+                self.active = False
+            return None
+        
+        if self.landed:
+            return None
+        
+        # Move
+        self.x += self.vx
+        self.y += self.vy
+        
+        # Spawn trail particles
+        self.trail_timer += dt
+        if self.trail_timer >= self.trail_interval:
+            self.trail_timer = 0
+            if particle_manager:
+                particle_manager.spawn_star_trail(self.x, self.y)
+        
+        # Check for ground collision
+        tile_x = int(self.x // TILE_SIZE)
+        tile_y = int(self.y // TILE_SIZE)
+        
+        if world.is_solid(tile_x, tile_y) or self.y >= self.target_y:
+            # Landed - convert to dropped item
+            self.landed = True
+            self.active = False
+            # Spawn impact particles
+            if particle_manager:
+                particle_manager.spawn_star_impact(self.x, self.y)
+            return (tile_x, tile_y)  # Return landing position
+        
+        return None
+    
+    def start_vanishing(self):
+        """Start the vanishing effect when day comes."""
+        if not self.vanishing and (self.active or self.landed):
+            self.vanishing = True
+            self.vanish_timer = self.vanish_duration
+    
+    def draw(self, surface, camera, is_day=False):
+        """Draw the falling star with glow and sparkle effects."""
+        if not self.active and not self.vanishing:
+            return
+        
+        screen_x, screen_y = camera.world_to_screen(self.x, self.y)
+        
+        # Calculate alpha for vanishing effect
+        alpha = 255
+        if self.vanishing:
+            alpha = int(255 * (self.vanish_timer / self.vanish_duration))
+        
+        # Draw glow (multiple circles for glow effect)
+        glow_sizes = [20, 15, 10, 6]
+        glow_alphas = [0.2, 0.4, 0.6, 0.8]
+        for size, glow_alpha in zip(glow_sizes, glow_alphas):
+            glow_surface = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
+            final_alpha = int(255 * glow_alpha * (alpha / 255))
+            pygame.draw.circle(glow_surface, (255, 255, 100, final_alpha), 
+                             (size, size), size)
+            surface.blit(glow_surface, 
+                        (int(screen_x - size), int(screen_y - size)))
+        
+        # Draw main star (bright yellow)
+        star_size = max(2, int(4 * camera.zoom))
+        pygame.draw.circle(surface, (255, 255, 150), 
+                          (int(screen_x), int(screen_y)), star_size)
+        
+        # Draw sparkle points
+        self.sparkle_timer += 0.1
+        for i in range(4):
+            angle = self.sparkle_timer + self.sparkle_offset + (i * math.pi / 2)
+            sparkle_dist = star_size + 3
+            sparkle_x = screen_x + math.cos(angle) * sparkle_dist
+            sparkle_y = screen_y + math.sin(angle) * sparkle_dist
+            sparkle_size = max(1, int(2 * camera.zoom))
+            pygame.draw.circle(surface, (255, 255, 200), 
+                              (int(sparkle_x), int(sparkle_y)), sparkle_size)
+
+
+class StarDropManager:
+    """Manages falling stars at night time."""
+    
+    def __init__(self):
+        self.falling_stars = []
+        self.spawn_timer = 0.0
+        self.spawn_interval = 3.0  # Spawn a star every 3 seconds at night
+        self.max_stars = 5  # Maximum falling stars at once
+    
+    def update(self, dt, world, camera, is_night, particle_manager, drop_manager):
+        """Update falling stars and spawn new ones at night."""
+        # Spawn new stars at night
+        if is_night:
+            self.spawn_timer += dt
+            if self.spawn_timer >= self.spawn_interval and len(self.falling_stars) < self.max_stars:
+                self.spawn_timer = 0
+                self._spawn_star(world, camera)
+        else:
+            # Day time - make all stars vanish
+            for star in self.falling_stars:
+                star.start_vanishing()
+        
+        # Update existing stars
+        landed_stars = []
+        for star in self.falling_stars:
+            result = star.update(dt, world, particle_manager)
+            if result:  # Star landed
+                tile_x, tile_y = result
+                landed_stars.append((tile_x, tile_y))
+        
+        # Remove inactive stars
+        self.falling_stars = [s for s in self.falling_stars if s.active or s.vanishing]
+        
+        # Convert landed stars to dropped items
+        # Spawn at tile_y - 1 so the star sits ON TOP of the ground, not inside it
+        for tile_x, tile_y in landed_stars:
+            drop_manager.spawn_drop(tile_x, tile_y - 1, BlockType.YELLOW_STAR, falling=False)
+        
+        return landed_stars
+    
+    def _spawn_star(self, world, camera):
+        """Spawn a new falling star from the sky."""
+        # Pick a random x position within visible area
+        visible_left = int(camera.x // TILE_SIZE)
+        visible_right = int((camera.x + SCREEN_WIDTH / camera.zoom) // TILE_SIZE)
+        
+        spawn_tile_x = random.randint(visible_left, visible_right)
+        spawn_y = camera.y - 100  # Start above visible area
+        
+        # Target a spot on the ground
+        target_tile_x = spawn_tile_x + random.randint(-5, 5)
+        target_y = self._find_ground_y(world, target_tile_x, spawn_y)
+        
+        star = FallingStar(
+            spawn_tile_x * TILE_SIZE + TILE_SIZE // 2,
+            spawn_y,
+            target_tile_x * TILE_SIZE + TILE_SIZE // 2,
+            target_y
+        )
+        self.falling_stars.append(star)
+    
+    def _find_ground_y(self, world, tile_x, start_y):
+        """Find the y coordinate of the ground at a given x position."""
+        tile_y = int(start_y // TILE_SIZE)
+        while tile_y < world.height:
+            if world.is_solid(tile_x, tile_y):
+                return tile_y * TILE_SIZE
+            tile_y += 1
+        return world.height * TILE_SIZE
+    
+    def draw(self, surface, camera, is_night):
+        """Draw all falling stars."""
+        for star in self.falling_stars:
+            star.draw(surface, camera, is_night)

@@ -13,6 +13,109 @@ from game.blocks import (
 )
 
 
+class SimplexNoise:
+    """Simplex noise implementation for organic cave generation."""
+    
+    def __init__(self, seed=None):
+        if seed is None:
+            seed = random.randint(0, 100000)
+        self.seed = seed
+        # Permutation table for noise
+        self.perm = list(range(256))
+        random.seed(seed)
+        random.shuffle(self.perm)
+        self.perm = self.perm * 2  # Extend to avoid overflow
+        
+        # Gradient vectors for 2D
+        self.gradients = [
+            (1, 1), (-1, 1), (1, -1), (-1, -1),
+            (1, 0), (-1, 0), (1, 0), (-1, 0),
+            (0, 1), (0, -1), (0, 1), (0, -1)
+        ]
+    
+    def _dot(self, g, x, y):
+        """Dot product of gradient vector and position."""
+        return g[0] * x + g[1] * y
+    
+    def _fade(self, t):
+        """Fade function: 6t^5 - 15t^4 + 10t^3"""
+        return t * t * t * (t * (t * 6 - 15) + 10)
+    
+    def noise_2d(self, x, y):
+        """Generate 2D simplex noise value (-1 to 1)."""
+        # Skew the input space to determine which simplex cell we're in
+        F2 = 0.5 * (math.sqrt(3.0) - 1.0)
+        s = (x + y) * F2
+        i = int(x + s)
+        j = int(y + s)
+        
+        # Unskew the cell origin back to (x,y) space
+        G2 = (3.0 - math.sqrt(3.0)) / 6.0
+        t = (i + j) * G2
+        X0 = i - t
+        Y0 = j - t
+        x0 = x - X0
+        y0 = y - Y0
+        
+        # Determine which simplex we are in
+        if x0 > y0:
+            i1, j1 = 1, 0  # Lower triangle, XY order
+        else:
+            i1, j1 = 0, 1  # Upper triangle, YX order
+        
+        # Offsets for middle and last corners
+        x1 = x0 - i1 + G2
+        y1 = y0 - j1 + G2
+        x2 = x0 - 1.0 + 2.0 * G2
+        y2 = y0 - 1.0 + 2.0 * G2
+        
+        # Hash coordinates of the corners
+        ii = i & 255
+        jj = j & 255
+        gi0 = self.perm[ii + self.perm[jj]] % 12
+        gi1 = self.perm[ii + i1 + self.perm[jj + j1]] % 12
+        gi2 = self.perm[ii + 1 + self.perm[jj + 1]] % 12
+        
+        # Calculate contributions from the three corners
+        n0 = n1 = n2 = 0.0
+        
+        # Corner 0
+        t0 = 0.5 - x0 * x0 - y0 * y0
+        if t0 >= 0:
+            t0 *= t0
+            n0 = t0 * t0 * self._dot(self.gradients[gi0], x0, y0)
+        
+        # Corner 1
+        t1 = 0.5 - x1 * x1 - y1 * y1
+        if t1 >= 0:
+            t1 *= t1
+            n1 = t1 * t1 * self._dot(self.gradients[gi1], x1, y1)
+        
+        # Corner 2
+        t2 = 0.5 - x2 * x2 - y2 * y2
+        if t2 >= 0:
+            t2 *= t2
+            n2 = t2 * t2 * self._dot(self.gradients[gi2], x2, y2)
+        
+        # Add contributions and scale to [-1, 1] range
+        return 70.0 * (n0 + n1 + n2)
+    
+    def fractal_noise(self, x, y, octaves=4, persistence=0.5, lacunarity=2.0):
+        """Generate fractal noise by combining multiple octaves."""
+        total = 0.0
+        amplitude = 1.0
+        frequency = 1.0
+        max_value = 0.0
+        
+        for _ in range(octaves):
+            total += self.noise_2d(x * frequency, y * frequency) * amplitude
+            max_value += amplitude
+            amplitude *= persistence
+            frequency *= lacunarity
+        
+        return total / max_value  # Normalize to [-1, 1]
+
+
 class World:
     """The game world composed of blocks."""
 
@@ -103,19 +206,8 @@ class World:
             for y in range(base_height + GRASS_LAYER_DEPTH + DIRT_LAYER_DEPTH, self.height):
                 self.grid[y][x] = BlockType.STONE
 
-        # Generate ores in stone layers (coal, iron, gold)
-        for x in range(self.width):
-            for y in range(0, self.height):
-                if self.grid[y][x] == BlockType.STONE:
-                    # Coal: common, spawns at any depth
-                    if random.random() < 0.03:  # 3% chance
-                        self.grid[y][x] = BlockType.COAL_ORE
-                    # Iron: medium rare, deeper layers
-                    elif y > 20 and random.random() < 0.015:  # 1.5% chance in deeper stone
-                        self.grid[y][x] = BlockType.IRON_ORE
-                    # Gold: rare, very deep
-                    elif y > 35 and random.random() < 0.008:  # 0.8% chance in very deep stone
-                        self.grid[y][x] = BlockType.GOLD_ORE
+        # Generate ores in veins (grouped clusters) - coal, iron, gold
+        self._generate_ore_veins()
 
         # Generate cave system (Terraria-like)
         self._generate_cave_system()
@@ -138,186 +230,250 @@ class World:
                 last_tree_x = x
     
     def _generate_cave_system(self):
-        """Generate a Terraria-like cave system with natural chambers and tunnels.
-        
-        Features:
-        - Multiple cave networks that can interconnect
-        - Large chambers connected by narrow tunnels
-        - Some caves connect to surface, others are deep underground
-        - Irregular but navigable structure
+        """Generate an improved cave system with noise-based organic shapes,
+        depth layers, biomes, water/lava pools, and large caverns.
         """
-        # Generate several cave networks
-        num_cave_networks = random.randint(4, 7)
+        # Initialize noise generators with different seeds for variation
+        cave_noise = SimplexNoise(seed=random.randint(0, 100000))
+        detail_noise = SimplexNoise(seed=random.randint(0, 100000))
+        biome_noise = SimplexNoise(seed=random.randint(0, 100000))
         
-        for network in range(num_cave_networks):
-            # Each network has a main chamber with branches
-            network_x = random.randint(20, self.width - 20)
-            network_y = random.randint(30, self.height - 20)
-            
-            # Create main chamber
-            self._create_cave_chamber(network_x, network_y, random.randint(5, 10))
-            
-            # Create branching tunnels from the main chamber
-            num_branches = random.randint(2, 5)
-            for _ in range(num_branches):
-                branch_direction = random.uniform(0, 2 * math.pi)
-                branch_length = random.randint(15, 40)
-                self._create_cave_tunnel(
-                    network_x, network_y,
-                    branch_direction, branch_length
-                )
+        # Generate caves in three depth layers
+        self._generate_shallow_caves(cave_noise, detail_noise, biome_noise)
+        self._generate_mid_caves(cave_noise, detail_noise, biome_noise)
+        self._generate_deep_caves(cave_noise, detail_noise, biome_noise)
         
-        # Create some surface entrances
-        num_entrances = random.randint(3, 5)
+        # Add surface entrances
+        self._create_surface_entrances()
+        
+        # Add water and lava pools
+        self._add_fluid_pools()
+        
+        # Add large vertical caverns
+        self._add_large_caverns(cave_noise)
+    
+    def _generate_shallow_caves(self, cave_noise, detail_noise, biome_noise):
+        """Generate shallow caves (y=18-30): small, fragmented, with ice biome."""
+        y_start, y_end = 18, 30
+        scale = 40  # Smaller caves
+        threshold = 0.45  # Higher threshold = less caves
+        
+        for y in range(y_start, y_end):
+            for x in range(5, self.width - 5):
+                if self.grid[y][x] in (BlockType.AIR, BlockType.GRASS):
+                    continue
+                
+                # Fractal noise for organic shape
+                noise_val = cave_noise.fractal_noise(x / scale, y / scale, octaves=3)
+                detail_val = detail_noise.fractal_noise(x / 15, y / 15, octaves=2)
+                combined = noise_val * 0.7 + detail_val * 0.3
+                
+                if combined > threshold:
+                    # Determine biome
+                    biome_val = biome_noise.noise_2d(x / 80, y / 80)
+                    
+                    if biome_val > 0.3:
+                        # Ice biome - replace stone with ice
+                        if self.grid[y][x] == BlockType.STONE:
+                            self.grid[y][x] = BlockType.ICE
+                    elif biome_val < -0.3:
+                        # Mossy biome
+                        if self.grid[y][x] == BlockType.STONE:
+                            self.grid[y][x] = BlockType.MOSSY_STONE
+                    
+                    # Carve cave
+                    if self.grid[y][x] not in (BlockType.AIR, BlockType.GRASS):
+                        self.grid[y][x] = BlockType.AIR
+    
+    def _generate_mid_caves(self, cave_noise, detail_noise, biome_noise):
+        """Generate mid-level caves (y=30-45): larger, water pools, crystal biome."""
+        y_start, y_end = 30, 45
+        scale = 55  # Medium caves
+        threshold = 0.35  # More caves at this level
+        
+        for y in range(y_start, y_end):
+            for x in range(5, self.width - 5):
+                if self.grid[y][x] in (BlockType.AIR, BlockType.GRASS):
+                    continue
+                
+                # Fractal noise
+                noise_val = cave_noise.fractal_noise(x / scale, y / scale, octaves=4)
+                detail_val = detail_noise.fractal_noise(x / 20, y / 20, octaves=2)
+                combined = noise_val * 0.6 + detail_val * 0.4
+                
+                if combined > threshold:
+                    # Determine biome
+                    biome_val = biome_noise.noise_2d(x / 100, y / 100)
+                    
+                    if biome_val > 0.4:
+                        # Crystal biome
+                        if self.grid[y][x] == BlockType.STONE and random.random() < 0.3:
+                            self.grid[y][x] = BlockType.CRYSTAL
+                    elif biome_val < -0.4:
+                        # Mossy biome
+                        if self.grid[y][x] == BlockType.STONE:
+                            self.grid[y][x] = BlockType.MOSSY_STONE
+                    
+                    # Carve cave
+                    if self.grid[y][x] not in (BlockType.AIR, BlockType.GRASS):
+                        self.grid[y][x] = BlockType.AIR
+    
+    def _generate_deep_caves(self, cave_noise, detail_noise, biome_noise):
+        """Generate deep caves (y=45+): huge caverns, lava pools, crystal biome."""
+        y_start = 45
+        scale = 70  # Large caves
+        threshold = 0.25  # Most open at this level
+        
+        for y in range(y_start, self.height - 5):
+            for x in range(5, self.width - 5):
+                if self.grid[y][x] in (BlockType.AIR, BlockType.GRASS):
+                    continue
+                
+                # Fractal noise with lower frequency for bigger caves
+                noise_val = cave_noise.fractal_noise(x / scale, y / scale, octaves=4, persistence=0.6)
+                detail_val = detail_noise.fractal_noise(x / 25, y / 25, octaves=3)
+                combined = noise_val * 0.5 + detail_val * 0.5
+                
+                if combined > threshold:
+                    # Deep caves favor crystal biome
+                    biome_val = biome_noise.noise_2d(x / 120, y / 120)
+                    
+                    if biome_val > 0.2:
+                        # Crystal biome - more common deep
+                        if self.grid[y][x] == BlockType.STONE and random.random() < 0.4:
+                            self.grid[y][x] = BlockType.CRYSTAL
+                    
+                    # Carve cave
+                    if self.grid[y][x] not in (BlockType.AIR, BlockType.GRASS):
+                        self.grid[y][x] = BlockType.AIR
+    
+    def _create_surface_entrances(self):
+        """Create cave entrances that connect surface to underground.
+        Not too frequent - 2-4 entrances per world, some from mountains."""
+        num_entrances = random.randint(2, 4)
+        
         for _ in range(num_entrances):
-            entrance_x = random.randint(10, self.width - 10)
+            entrance_x = random.randint(15, self.width - 15)
+            
             # Find surface at this x
             surface_y = None
             for y in range(self.height):
                 if self.grid[y][entrance_x] == BlockType.GRASS:
                     surface_y = y
                     break
-            if surface_y:
-                self._create_surface_entrance(entrance_x, surface_y)
-        
-        # Connect nearby caves (create passages between them)
-        self._connect_nearby_caves()
+            
+            if surface_y is None:
+                continue
+            
+            # Create entrance shaft using noise for organic shape
+            shaft_depth = random.randint(10, 20)
+            width = random.randint(2, 4)
+            
+            for dy in range(shaft_depth):
+                y = surface_y + dy
+                if y >= self.height:
+                    break
+                
+                # Vary width slightly
+                current_width = width + random.randint(-1, 1)
+                for dx in range(-current_width // 2, current_width // 2 + 1):
+                    x = entrance_x + dx
+                    if 0 <= x < self.width:
+                        if self.grid[y][x] not in (BlockType.AIR, BlockType.GRASS):
+                            self.grid[y][x] = BlockType.AIR
     
-    def _create_cave_chamber(self, cx, cy, radius):
-        """Create a roughly circular cave chamber."""
-        # Use noise to make it irregular
+    def _add_fluid_pools(self):
+        """Add water pools in mid caves and lava pools in deep caves."""
+        # Water pools in mid-level caves (y=32-42)
+        num_water_pools = random.randint(5, 10)
+        for _ in range(num_water_pools):
+            pool_x = random.randint(10, self.width - 10)
+            pool_y = random.randint(32, 42)
+            pool_radius = random.randint(3, 6)
+            self._create_fluid_pool(pool_x, pool_y, pool_radius, BlockType.WATER)
+        
+        # Lava pools in deep caves (y=48+)
+        num_lava_pools = random.randint(4, 8)
+        for _ in range(num_lava_pools):
+            pool_x = random.randint(10, self.width - 10)
+            pool_y = random.randint(48, self.height - 10)
+            pool_radius = random.randint(4, 8)
+            self._create_fluid_pool(pool_x, pool_y, pool_radius, BlockType.LAVA)
+    
+    def _create_fluid_pool(self, cx, cy, radius, fluid_type):
+        """Create a pool of fluid with organic shape."""
+        noise = SimplexNoise(seed=random.randint(0, 100000))
+        
         for dy in range(-radius, radius + 1):
             for dx in range(-radius, radius + 1):
                 dist = math.sqrt(dx * dx + dy * dy)
-                # Add irregularity
-                noise = random.uniform(0.7, 1.3)
-                if dist * noise < radius:
-                    tx = cx + dx
-                    ty = cy + dy
-                    if 0 <= tx < self.width and 0 <= ty < self.height:
-                        # Don't clear surface blocks
-                        if self.grid[ty][tx] not in (BlockType.AIR, BlockType.GRASS):
-                            # Keep some blocks for visual interest (stalactites, etc.)
-                            if random.random() < 0.95:
-                                self.grid[ty][tx] = BlockType.AIR
-    
-    def _create_cave_tunnel(self, start_x, start_y, direction, length):
-        """Create a winding tunnel from a starting point."""
-        current_x = float(start_x)
-        current_y = float(start_y)
-        
-        # Tunnel width varies
-        base_width = random.uniform(1.5, 3.0)
-        
-        for step in range(length):
-            # Add some waviness to the tunnel
-            direction += random.uniform(-0.3, 0.3)
-            
-            # Move along the tunnel
-            current_x += math.cos(direction) * 1.5
-            current_y += math.sin(direction) * 1.5
-            
-            # Clamp to bounds
-            if current_x < 5 or current_x >= self.width - 5:
-                break
-            if current_y < 10 or current_y >= self.height - 5:
-                break
-            
-            # Carve tunnel at current position
-            width = base_width + random.uniform(-0.5, 0.5)
-            self._carve_tunnel_section(int(current_x), int(current_y), width)
-            
-            # Occasionally create a small chamber
-            if random.random() < 0.05:
-                chamber_radius = random.randint(2, 4)
-                self._create_cave_chamber(int(current_x), int(current_y), chamber_radius)
-    
-    def _carve_tunnel_section(self, cx, cy, width):
-        """Carve a roughly circular section of tunnel."""
-        radius = int(width)
-        for dy in range(-radius, radius + 1):
-            for dx in range(-radius, radius + 1):
-                if dx * dx + dy * dy <= width * width:
-                    tx = cx + dx
-                    ty = cy + dy
-                    if 0 <= tx < self.width and 0 <= ty < self.height:
-                        if self.grid[ty][tx] not in (BlockType.AIR, BlockType.GRASS):
-                            self.grid[ty][tx] = BlockType.AIR
-    
-    def _create_surface_entrance(self, entrance_x, surface_y):
-        """Create a cave entrance that connects to the surface."""
-        # Create a shaft going down
-        shaft_width = random.randint(2, 4)
-        shaft_depth = random.randint(8, 15)
-        
-        start_x = entrance_x - shaft_width // 2
-        
-        # Clear entrance shaft
-        for dy in range(shaft_depth):
-            for dx in range(shaft_width):
-                tx = start_x + dx
-                ty = surface_y + dy
-                if 0 <= tx < self.width and 0 <= ty < self.height:
-                    self.grid[ty][tx] = BlockType.AIR
-        
-        # At the bottom, create a small chamber
-        chamber_y = surface_y + shaft_depth
-        self._create_cave_chamber(entrance_x, chamber_y, random.randint(3, 5))
-        
-        # Create a tunnel going somewhere from the chamber
-        tunnel_direction = random.uniform(-math.pi/4, math.pi/4) + math.pi/2  # Mostly downward
-        self._create_cave_tunnel(entrance_x, chamber_y, tunnel_direction, random.randint(20, 40))
-    
-    def _connect_nearby_caves(self):
-        """Connect caves that are close to each other."""
-        # Find air pockets and try to connect nearby ones
-        for _ in range(10):  # Try 10 random connections
-            # Pick a random underground air block
-            x = random.randint(10, self.width - 10)
-            y = random.randint(30, self.height - 10)
-            
-            if self.grid[y][x] != BlockType.AIR:
-                continue
-            
-            # Try to find another air pocket nearby
-            for direction in range(8):
-                angle = direction * math.pi / 4
-                check_dist = random.randint(10, 25)
-                tx = int(x + math.cos(angle) * check_dist)
-                ty = int(y + math.sin(angle) * check_dist)
                 
-                if 0 <= tx < self.width and 0 <= ty < self.height:
-                    if self.grid[ty][tx] == BlockType.AIR:
-                        # Found nearby cave - create a connecting tunnel
-                        self._create_direct_tunnel(x, y, tx, ty)
-                        break
+                # Add noise for irregular edge
+                edge_noise = noise.noise_2d((cx + dx) / 8, (cy + dy) / 8)
+                effective_radius = radius + edge_noise * 2
+                
+                if dist < effective_radius:
+                    x, y = cx + dx, cy + dy
+                    if 0 <= x < self.width and 0 <= y < self.height:
+                        # Only place fluid in air pockets (caves)
+                        if self.grid[y][x] == BlockType.AIR:
+                            self.grid[y][x] = fluid_type
     
-    def _create_direct_tunnel(self, x1, y1, x2, y2):
-        """Create a direct tunnel between two points."""
-        dx = x2 - x1
-        dy = y2 - y1
-        distance = math.sqrt(dx * dx + dy * dy)
+    def _add_large_caverns(self, noise):
+        """Add massive open caverns with vertical drops."""
+        num_caverns = random.randint(2, 4)
         
-        if distance < 1:
-            return
-        
-        # Normalize direction
-        dx /= distance
-        dy /= distance
-        
-        # Carve tunnel along the line
-        for step in range(int(distance)):
-            tx = int(x1 + dx * step)
-            ty = int(y1 + dy * step)
+        for _ in range(num_caverns):
+            # Place caverns in deep area
+            cx = random.randint(30, self.width - 30)
+            cy = random.randint(50, self.height - 20)
             
-            # Carve a small section
-            for ox in range(-1, 2):
-                for oy in range(-1, 2):
-                    cx = tx + ox
-                    cy = ty + oy
-                    if 0 <= cx < self.width and 0 <= cy < self.height:
-                        if self.grid[cy][cx] not in (BlockType.AIR, BlockType.GRASS):
-                            self.grid[cy][cx] = BlockType.AIR
+            # Large radius for cavern
+            radius_x = random.randint(15, 25)
+            radius_y = random.randint(20, 35)
+            
+            for dy in range(-radius_y, radius_y + 1):
+                for dx in range(-radius_x, radius_x + 1):
+                    # Elliptical shape with noise
+                    dist = math.sqrt((dx / radius_x) ** 2 + (dy / radius_y) ** 2)
+                    
+                    # Large noise for irregular massive cavern
+                    cavern_noise = noise.fractal_noise((cx + dx) / 30, (cy + dy) / 30, octaves=3)
+                    threshold = 0.8 + cavern_noise * 0.3
+                    
+                    if dist < threshold:
+                        x, y = cx + dx, cy + dy
+                        if 0 <= x < self.width and 0 <= y < self.height:
+                            if self.grid[y][x] not in (BlockType.GRASS, BlockType.WATER, BlockType.LAVA):
+                                self.grid[y][x] = BlockType.AIR
+            
+            # Add some crystal formations in the cavern
+            self._add_crystal_formations(cx, cy, radius_x, radius_y)
+    
+    def _add_crystal_formations(self, cx, cy, radius_x, radius_y):
+        """Add crystal formations at the edges of a cavern."""
+        num_crystals = random.randint(5, 12)
+        
+        for _ in range(num_crystals):
+            # Random position on cavern edge
+            angle = random.uniform(0, 2 * math.pi)
+            dist = random.uniform(0.7, 1.0) * min(radius_x, radius_y)
+            
+            x = int(cx + math.cos(angle) * radius_x * (dist / min(radius_x, radius_y)))
+            y = int(cy + math.sin(angle) * radius_y * (dist / min(radius_x, radius_y)))
+            
+            if 0 <= x < self.width and 0 <= y < self.height:
+                # Place crystal if it's stone
+                if self.grid[y][x] == BlockType.STONE:
+                    self.grid[y][x] = BlockType.CRYSTAL
+                    # Sometimes extend inward
+                    if random.random() < 0.5:
+                        dx = int(math.cos(angle) * -1)
+                        dy = int(math.sin(angle) * -1)
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < self.width and 0 <= ny < self.height:
+                            if self.grid[ny][nx] == BlockType.STONE:
+                                self.grid[ny][nx] = BlockType.CRYSTAL
 
     def _generate_tree(self, x):
         """Generate a tree at column x."""
@@ -351,6 +507,80 @@ class World:
                         # Don't overwrite the trunk
                         if self.grid[y][xx] == BlockType.AIR:
                             self.grid[y][xx] = BlockType.LEAVES
+
+    def _generate_ore_veins(self):
+        """Generate ore veins - grouped clusters of 3-4 ore blocks.
+        
+        Instead of scattered individual ores, this creates veins that are
+        more realistic and rewarding to find.
+        """
+        # Coal veins: common, any depth, 8-15 veins per world
+        num_coal_veins = random.randint(8, 15)
+        for _ in range(num_coal_veins):
+            self._create_ore_vein(BlockType.COAL_ORE, min_depth=5, max_depth=self.height - 5, 
+                                  vein_size=random.randint(3, 5))
+        
+        # Iron veins: less common, deeper only (y>20), 5-10 veins
+        num_iron_veins = random.randint(5, 10)
+        for _ in range(num_iron_veins):
+            self._create_ore_vein(BlockType.IRON_ORE, min_depth=20, max_depth=self.height - 5,
+                                  vein_size=random.randint(3, 4))
+        
+        # Gold veins: rare, very deep (y>35), 3-6 veins
+        num_gold_veins = random.randint(3, 6)
+        for _ in range(num_gold_veins):
+            self._create_ore_vein(BlockType.GOLD_ORE, min_depth=35, max_depth=self.height - 5,
+                                  vein_size=random.randint(3, 4))
+    
+    def _create_ore_vein(self, ore_type, min_depth, max_depth, vein_size):
+        """Create a single ore vein at a random location.
+        
+        Args:
+            ore_type: The type of ore to place (COAL_ORE, IRON_ORE, GOLD_ORE)
+            min_depth: Minimum Y coordinate for the vein
+            max_depth: Maximum Y coordinate for the vein
+            vein_size: Number of ore blocks in the vein (3-5)
+        """
+        # Find a valid starting position in stone
+        attempts = 0
+        while attempts < 50:  # Limit attempts to avoid infinite loops
+            start_x = random.randint(5, self.width - 5)
+            start_y = random.randint(min_depth, max_depth)
+            
+            if self.grid[start_y][start_x] == BlockType.STONE:
+                break
+            attempts += 1
+        
+        if attempts >= 50:
+            return  # Couldn't find valid position
+        
+        # Create the vein by growing from the starting position
+        vein_blocks = [(start_x, start_y)]
+        self.grid[start_y][start_x] = ore_type
+        
+        # Grow the vein by adding adjacent stone blocks
+        for _ in range(vein_size - 1):
+            if not vein_blocks:
+                break
+            
+            # Pick a random block from the existing vein
+            base_x, base_y = random.choice(vein_blocks)
+            
+            # Try to add an adjacent stone block
+            directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+            random.shuffle(directions)
+            
+            for dx, dy in directions:
+                new_x = base_x + dx
+                new_y = base_y + dy
+                
+                # Check bounds
+                if 0 <= new_x < self.width and 0 <= new_y < self.height:
+                    # Only replace stone, not other ores or air
+                    if self.grid[new_y][new_x] == BlockType.STONE:
+                        self.grid[new_y][new_x] = ore_type
+                        vein_blocks.append((new_x, new_y))
+                        break
 
     def get_block(self, x, y):
         """Get block type at (x, y). Returns AIR if out of bounds."""
@@ -615,6 +845,64 @@ class World:
                     # Glowing embers inside
                     pygame.draw.circle(surface, (255, 100, 0),
                                       (int(sx) + int(scaled_size * 0.5), int(sy) + int(scaled_size * 0.5)), 3)
+                elif block_type == BlockType.WATER:
+                    # Draw water - blue with surface highlight
+                    pygame.draw.rect(surface, (50, 100, 200), rect)
+                    # Surface shimmer (lighter top)
+                    shimmer_rect = pygame.Rect(int(sx), int(sy), int(scaled_size) + 1, int(scaled_size * 0.3))
+                    pygame.draw.rect(surface, (80, 140, 220), shimmer_rect)
+                    # Bubbles
+                    if random.random() < 0.1:
+                        bubble_x = int(sx) + random.randint(2, int(scaled_size) - 2)
+                        bubble_y = int(sy) + random.randint(2, int(scaled_size) - 2)
+                        pygame.draw.circle(surface, (100, 160, 240), (bubble_x, bubble_y), 1)
+                elif block_type == BlockType.LAVA:
+                    # Draw lava - orange-red with glow
+                    pygame.draw.rect(surface, (255, 80, 20), rect)
+                    # Surface crust (darker orange)
+                    crust_rect = pygame.Rect(int(sx), int(sy), int(scaled_size) + 1, int(scaled_size * 0.25))
+                    pygame.draw.rect(surface, (255, 120, 40), crust_rect)
+                    # Glow spots
+                    if random.random() < 0.15:
+                        glow_x = int(sx) + random.randint(3, int(scaled_size) - 3)
+                        glow_y = int(sy) + random.randint(3, int(scaled_size) - 3)
+                        pygame.draw.circle(surface, (255, 180, 60), (glow_x, glow_y), 2)
+                elif block_type == BlockType.ICE:
+                    # Draw ice - light blue with transparency effect
+                    pygame.draw.rect(surface, (180, 220, 255), rect)
+                    # Ice crystal highlights
+                    pygame.draw.line(surface, (220, 240, 255),
+                                    (int(sx) + 2, int(sy) + 2),
+                                    (int(sx) + int(scaled_size * 0.4), int(sy) + int(scaled_size * 0.4)), 2)
+                    pygame.draw.line(surface, (200, 230, 255),
+                                    (int(sx) + int(scaled_size * 0.6), int(sy) + 2),
+                                    (int(sx) + int(scaled_size) - 2, int(sy) + int(scaled_size * 0.5)), 2)
+                    # Border
+                    pygame.draw.rect(surface, (150, 200, 240), rect, 1)
+                elif block_type == BlockType.MOSSY_STONE:
+                    # Draw mossy stone - gray-green with moss patches
+                    pygame.draw.rect(surface, (100, 120, 80), rect)
+                    # Moss patches
+                    pygame.draw.ellipse(surface, (80, 140, 60),
+                                       (int(sx) + 2, int(sy) + 2, int(scaled_size * 0.5), int(scaled_size * 0.4)))
+                    pygame.draw.ellipse(surface, (70, 130, 50),
+                                       (int(sx) + int(scaled_size * 0.4), int(sy) + int(scaled_size * 0.3),
+                                        int(scaled_size * 0.5), int(scaled_size * 0.5)))
+                elif block_type == BlockType.CRYSTAL:
+                    # Draw crystal - purple with facets
+                    pygame.draw.rect(surface, (200, 150, 255), rect)
+                    # Crystal facets (diamond pattern)
+                    center_x = int(sx) + int(scaled_size // 2)
+                    center_y = int(sy) + int(scaled_size // 2)
+                    # Draw X pattern for crystal facets
+                    pygame.draw.line(surface, (220, 180, 255),
+                                    (int(sx) + 2, int(sy) + 2),
+                                    (int(sx) + int(scaled_size) - 2, int(sy) + int(scaled_size) - 2), 2)
+                    pygame.draw.line(surface, (220, 180, 255),
+                                    (int(sx) + int(scaled_size) - 2, int(sy) + 2),
+                                    (int(sx) + 2, int(sy) + int(scaled_size) - 2), 2)
+                    # Center highlight
+                    pygame.draw.circle(surface, (240, 210, 255), (center_x, center_y), 2)
                 else:
                     pygame.draw.rect(surface, color, rect)
 

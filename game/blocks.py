@@ -39,6 +39,16 @@ class BlockType:
     GOLD_HAT = 22
     GOLD_BODY_ARMOR = 23
     GOLD_LEGGINGS = 24
+    # Stars
+    YELLOW_STAR = 25
+    BLUE_STAR = 26
+    # Fluids
+    WATER = 27
+    LAVA = 28
+    # Cave biomes blocks
+    ICE = 29
+    MOSSY_STONE = 30
+    CRYSTAL = 31
 
 
 class ToolType:
@@ -97,24 +107,38 @@ GOLD_LEGGINGS_COLOR = (220, 180, 0)
 IRON_TOOL_COLOR = (180, 180, 200)  # Silver metal
 # Gold tool colors
 GOLD_TOOL_COLOR = (255, 215, 0)  # Gold
+# Star colors
+YELLOW_STAR_COLOR = (255, 255, 100)  # Bright yellow
+BLUE_STAR_COLOR = (100, 150, 255)  # Bright blue
+# Fluid colors
+WATER_COLOR = (50, 100, 200)  # Blue water
+LAVA_COLOR = (255, 80, 20)  # Orange-red lava
+# Cave biome colors
+ICE_COLOR = (180, 220, 255)  # Light blue ice
+MOSSY_STONE_COLOR = (100, 120, 80)  # Greenish stone
+CRYSTAL_COLOR = (200, 150, 255)  # Purple crystal
 
 
 # Tool properties: (name, color, damage, speed_multiplier)
 # Quality order: Iron > Gold > Wood/Stone
+# Damage notes: Eye enemies have 2 health
+# - Default sword: 1 damage (2 hits to kill, not one-shot)
+# - Gold sword: 1 damage (2 hits to kill), faster swing
+# - Iron sword: 2 damage (one-shot kill)
 TOOL_DATA = {
     # Basic tools (wood/stone)
-    ToolType.SWORD: ("Sword", SWORD_COLOR, 3, 1.0),
+    ToolType.SWORD: ("Sword", SWORD_COLOR, 1, 1.0),
     ToolType.PICKAXE: ("Pickaxe", PICKAXE_COLOR, 2, 1.0),
     ToolType.AXE: ("Axe", AXE_COLOR, 3, 1.0),
     ToolType.SHOVEL: ("Shovel", SHOVEL_COLOR, 2, 1.0),
     ToolType.BOW: ("Bow", BOW_COLOR, 1, 1.0),
-    # Iron tools (best quality)
-    ToolType.IRON_SWORD: ("Iron Sword", IRON_TOOL_COLOR, 7, 1.5),
+    # Iron tools (best quality) - iron sword one-shots eyes (2 damage >= 2 health)
+    ToolType.IRON_SWORD: ("Iron Sword", IRON_TOOL_COLOR, 2, 1.5),
     ToolType.IRON_PICKAXE: ("Iron Pickaxe", IRON_TOOL_COLOR, 4, 1.5),
     ToolType.IRON_AXE: ("Iron Axe", IRON_TOOL_COLOR, 6, 1.5),
     ToolType.IRON_SHOVEL: ("Iron Shovel", IRON_TOOL_COLOR, 4, 1.5),
-    # Gold tools (second best)
-    ToolType.GOLD_SWORD: ("Gold Sword", GOLD_TOOL_COLOR, 5, 1.3),
+    # Gold tools (second best) - gold sword has fast attack but doesn't one-shot
+    ToolType.GOLD_SWORD: ("Gold Sword", GOLD_TOOL_COLOR, 1, 1.8),  # 1.8x speed for faster swings
     ToolType.GOLD_PICKAXE: ("Gold Pickaxe", GOLD_TOOL_COLOR, 3, 1.3),
     ToolType.GOLD_AXE: ("Gold Axe", GOLD_TOOL_COLOR, 4, 1.3),
     ToolType.GOLD_SHOVEL: ("Gold Shovel", GOLD_TOOL_COLOR, 3, 1.3),
@@ -164,6 +188,41 @@ TOOL_EFFICIENCY = {
 def is_tool(item_type):
     """Check if an item type is a tool."""
     return item_type in TOOL_DATA
+
+
+def is_armor(item_type):
+    """Check if an item type is an armor item (not placeable, like tools)."""
+    return item_type in (
+        BlockType.HAT, BlockType.BODY_ARMOR, BlockType.LEGGINGS,
+        BlockType.IRON_HAT, BlockType.IRON_BODY_ARMOR, BlockType.IRON_LEGGINGS,
+        BlockType.GOLD_HAT, BlockType.GOLD_BODY_ARMOR, BlockType.GOLD_LEGGINGS,
+    )
+
+
+def get_armor_defense(item_type):
+    """Get the defense points for an armor piece.
+    
+    Leather armor: 1 defense per piece
+    Iron armor: 2 defense per piece
+    Gold armor: 2 defense per piece
+    """
+    if item_type in (BlockType.HAT, BlockType.BODY_ARMOR, BlockType.LEGGINGS):
+        return 1  # Leather armor
+    elif item_type in (BlockType.IRON_HAT, BlockType.IRON_BODY_ARMOR, BlockType.IRON_LEGGINGS):
+        return 2  # Iron armor
+    elif item_type in (BlockType.GOLD_HAT, BlockType.GOLD_BODY_ARMOR, BlockType.GOLD_LEGGINGS):
+        return 2  # Gold armor
+    return 0
+
+
+def is_star(item_type):
+    """Check if an item type is a star (not placeable, consumable item)."""
+    return item_type in (BlockType.YELLOW_STAR, BlockType.BLUE_STAR)
+
+
+def is_sword(item_type):
+    """Check if an item type is any kind of sword."""
+    return item_type in (ToolType.SWORD, ToolType.IRON_SWORD, ToolType.GOLD_SWORD)
 
 
 def get_tool_name(tool_type):
@@ -219,6 +278,16 @@ BLOCK_DATA = {
     BlockType.GOLD_HAT: ("Gold Helmet", GOLD_HAT_COLOR, True, False, 0.5),
     BlockType.GOLD_BODY_ARMOR: ("Gold Armor", GOLD_BODY_ARMOR_COLOR, True, False, 0.5),
     BlockType.GOLD_LEGGINGS: ("Gold Leggings", GOLD_LEGGINGS_COLOR, True, False, 0.5),
+    # Stars (items, not placeable blocks)
+    BlockType.YELLOW_STAR: ("Yellow Star", YELLOW_STAR_COLOR, True, False, 0.0),
+    BlockType.BLUE_STAR: ("Blue Star", BLUE_STAR_COLOR, True, False, 0.0),
+    # Fluids (not breakable, not solid - can swim through)
+    BlockType.WATER: ("Water", WATER_COLOR, False, False, 0.0),
+    BlockType.LAVA: ("Lava", LAVA_COLOR, False, False, 0.0),
+    # Cave biome blocks
+    BlockType.ICE: ("Ice", ICE_COLOR, True, True, 2.0),
+    BlockType.MOSSY_STONE: ("Mossy Stone", MOSSY_STONE_COLOR, True, True, 4.0),
+    BlockType.CRYSTAL: ("Crystal", CRYSTAL_COLOR, True, True, 3.0),
 }
 
 
@@ -327,6 +396,8 @@ CRAFTING_RECIPES = {
     BlockType.GOLD_HAT: (1, [(BlockType.GOLD_INGOT, 5)]),  # 5 gold ingots -> 1 gold helmet
     BlockType.GOLD_BODY_ARMOR: (1, [(BlockType.GOLD_INGOT, 8)]),  # 8 gold ingots -> 1 gold armor
     BlockType.GOLD_LEGGINGS: (1, [(BlockType.GOLD_INGOT, 7)]),  # 7 gold ingots -> 1 gold leggings
+    # Star crafting
+    BlockType.BLUE_STAR: (1, [(BlockType.YELLOW_STAR, 2)]),  # 2 yellow stars -> 1 blue star
 }
 
 

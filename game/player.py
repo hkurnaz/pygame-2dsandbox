@@ -228,8 +228,14 @@ class Player:
                             self.vy = 0
                         rect = self.rect
 
-    def draw(self, surface, camera):
-        """Draw the player as a thinner, more human-like character."""
+    def draw(self, surface, camera, armor=None):
+        """Draw the player as a thinner, more human-like character.
+        
+        Args:
+            surface: Pygame surface to draw on
+            camera: Camera object for world-to-screen conversion
+            armor: Optional list of armor items [hat, body_armor, leggings] from inventory
+        """
         screen_rect = camera.apply(self.rect)
         zoom = camera.zoom
         
@@ -406,6 +412,26 @@ class Player:
         )
         pygame.draw.ellipse(surface, skin_color, head_rect)
         
+        # UFO mode: Draw yellow crown on head
+        if self.ufo_mode:
+            crown_y = head_rect.y - scale(8)
+            crown_height = scale(10)
+            crown_width = scale(20)
+            crown_x = head_rect.centerx - crown_width // 2
+            
+            # Crown base
+            pygame.draw.polygon(surface, (255, 215, 0), [
+                (crown_x, crown_y + crown_height),
+                (crown_x + crown_width, crown_y + crown_height),
+                (crown_x + crown_width * 0.85, crown_y + crown_height * 0.3),
+                (crown_x + crown_width * 0.5, crown_y),
+                (crown_x + crown_width * 0.15, crown_y + crown_height * 0.3),
+            ])
+            # Crown jewels (red dots)
+            jewel_size = scale(2)
+            pygame.draw.circle(surface, (200, 0, 0), 
+                              (int(crown_x + crown_width * 0.5), int(crown_y + scale(2))), jewel_size)
+        
         # Hair (top and sides)
         hair_height = scale(10)
         hair_rect = pygame.Rect(
@@ -496,3 +522,70 @@ class Player:
             mouth_height
         )
         pygame.draw.ellipse(surface, (180, 100, 100), mouth_rect)
+        
+        # === DRAW ARMOR OVERLAYS ===
+        if armor is not None:
+            # Armor colors based on type
+            armor_colors = {
+                BlockType.HAT: (80, 60, 40),           # Leather brown
+                BlockType.BODY_ARMOR: (80, 60, 40),
+                BlockType.LEGGINGS: (80, 60, 40),
+                BlockType.IRON_HAT: (180, 180, 200),   # Silver metal
+                BlockType.IRON_BODY_ARMOR: (180, 180, 200),
+                BlockType.IRON_LEGGINGS: (180, 180, 200),
+                BlockType.GOLD_HAT: (255, 215, 0),     # Gold
+                BlockType.GOLD_BODY_ARMOR: (255, 215, 0),
+                BlockType.GOLD_LEGGINGS: (255, 215, 0),
+            }
+            
+            # Draw helmet/hat (on head)
+            if armor[0] is not None:
+                hat_type = armor[0][0]  # Get item type
+                hat_color = armor_colors.get(hat_type, (100, 80, 60))
+                
+                # Helmet shape - covers top of head
+                helmet_height = scale(14)
+                helmet_y = head_rect.y - scale(2)
+                helmet_rect = pygame.Rect(
+                    head_rect.x + scale(1),
+                    helmet_y,
+                    head_rect.width - scale(2),
+                    helmet_height
+                )
+                pygame.draw.ellipse(surface, hat_color, helmet_rect)
+                # Helmet visor/band
+                pygame.draw.line(surface, (60, 40, 20) if hat_type in (BlockType.HAT, BlockType.BODY_ARMOR, BlockType.LEGGINGS) else (100, 100, 120),
+                                (helmet_rect.x, helmet_rect.y + helmet_height * 0.7),
+                                (helmet_rect.right, helmet_rect.y + helmet_height * 0.7), scale(2))
+            
+            # Draw body armor (on torso)
+            if armor[1] is not None:
+                body_type = armor[1][0]
+                body_color = armor_colors.get(body_type, (100, 80, 60))
+                
+                # Body armor - covers the torso
+                body_armor_rect = pygame.Rect(
+                    body_rect.x + scale(1),
+                    body_rect.y + scale(4),
+                    body_rect.width - scale(2),
+                    body_rect.height - scale(8)
+                )
+                pygame.draw.rect(surface, body_color, body_armor_rect)
+                # Armor details (shoulder pads)
+                pygame.draw.rect(surface, (min(255, body_color[0] + 30), min(255, body_color[1] + 30), min(255, body_color[2] + 30)),
+                                (body_armor_rect.x, body_armor_rect.y, body_armor_rect.width, scale(8)))
+            
+            # Draw leggings (on legs)
+            if armor[2] is not None:
+                leg_type = armor[2][0]
+                leg_color = armor_colors.get(leg_type, (100, 80, 60))
+                
+                # Leggings - covers the pants area
+                for leg in [left_leg, right_leg]:
+                    leg_armor = pygame.Rect(
+                        leg.x,
+                        leg.y,
+                        leg.width,
+                        leg.height - scale(8)  # Leave shoes visible
+                    )
+                    pygame.draw.rect(surface, leg_color, leg_armor)

@@ -608,6 +608,8 @@ class Inventory:
         # Crafting
         self.craftable_items = []  # List of craftable (result_item, result_count, ingredients)
         self.hovered_craft = -1  # Index of hovered craft item
+        self.craft_scroll = 0  # Scroll offset for crafting panel
+        self.craft_max_visible = 8  # Max visible craft items before scrolling
 
     def add_item(self, item_type, count=1):
         """Add an item to the inventory. Returns True if successful."""
@@ -848,10 +850,23 @@ class Inventory:
                     items[item_type] = items.get(item_type, 0) + count
         return items
 
+    def get_total_defense(self):
+        """Calculate total defense from equipped armor."""
+        from game.blocks import get_armor_defense
+        total_defense = 0
+        for armor_slot in self.armor:
+            if armor_slot is not None:
+                item_type, _ = armor_slot
+                total_defense += get_armor_defense(item_type)
+        return total_defense
+
     def update_craftable(self, near_furnace=False):
         """Update the list of craftable items based on current inventory."""
         items = self.get_all_items()
         self.craftable_items = get_craftable_items(items, near_furnace)
+        # Clamp scroll to valid range
+        max_scroll = max(0, len(self.craftable_items) - self.craft_max_visible)
+        self.craft_scroll = max(0, min(self.craft_scroll, max_scroll))
 
     def craft_item(self, result_item):
         """Craft an item. Returns True if successful."""
@@ -909,13 +924,15 @@ class Inventory:
         return True
 
     def get_craft_slot_rect(self, index):
-        """Get the screen rect for a crafting slot on the left side."""
+        """Get the screen rect for a crafting slot on the left side (accounting for scroll)."""
         craft_panel_x = 10
         craft_panel_y = 80
         craft_slot_size = 36
         craft_padding = 5
         
-        y = craft_panel_y + index * (craft_slot_size + craft_padding)
+        # Account for scroll offset
+        visible_index = index - self.craft_scroll
+        y = craft_panel_y + visible_index * (craft_slot_size + craft_padding)
         return pygame.Rect(craft_panel_x, y, craft_slot_size, craft_slot_size)
 
     def check_craft_hover(self, mouse_x, mouse_y):
@@ -1111,22 +1128,26 @@ class Inventory:
                     rect.height - item_margin * 2
                 )
                 draw_item_in_slot(surface, item_type, item_rect, False)
+        
+        # Draw defense stat below armor slots
+        defense = self.get_total_defense()
+        defense_text = title_font.render(f"Defence {defense}", True, (200, 200, 100))
+        defense_y = armor_panel_y + armor_panel_height + 10
+        surface.blit(defense_text, (armor_panel_x, defense_y))
 
     def draw_crafting_panel(self, surface, mouse_x, mouse_y, near_furnace=False):
-        """Draw the crafting panel on the left side."""
+        """Draw the crafting panel on the left side with scrollable list."""
         if not self.is_open:
             return
         
         # Update craftable items
         self.update_craftable(near_furnace)
         
-        # Panel background
+        # Panel background - fixed height with scroll
         panel_x = 5
         panel_y = 60
         panel_width = 200  # Wider for item names
-        panel_height = 40 + len(self.craftable_items) * 50
-        if panel_height < 100:
-            panel_height = 100
+        panel_height = 40 + self.craft_max_visible * 50  # Fixed height for visible items
         
         panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
         pygame.draw.rect(surface, (30, 30, 40), panel_rect)
@@ -1137,15 +1158,29 @@ class Inventory:
         title = title_font.render("Crafting", True, WHITE)
         surface.blit(title, (panel_x + 10, panel_y + 5))
         
-        # Draw craftable items
+        # Draw craftable items with scroll
         font = pygame.font.SysFont(None, 16)
         name_font = pygame.font.SysFont(None, 18)
         craft_slot_size = 36
+        craft_padding = 5
         
         self.hovered_craft = self.check_craft_hover(mouse_x, mouse_y)
         
-        for i, (result_item, result_count, ingredients) in enumerate(self.craftable_items):
-            slot_rect = self.get_craft_slot_rect(i)
+        # Calculate visible range
+        total_items = len(self.craftable_items)
+        start_idx = self.craft_scroll
+        end_idx = min(start_idx + self.craft_max_visible, total_items)
+        
+        # Clip to panel area
+        clip_rect = pygame.Rect(panel_x, panel_y + 30, panel_width - 20, panel_height - 35)
+        surface.set_clip(clip_rect)
+        
+        for i in range(start_idx, end_idx):
+            result_item, result_count, ingredients = self.craftable_items[i]
+            display_idx = i - start_idx  # Index within visible area
+            
+            slot_y = panel_y + 30 + display_idx * (craft_slot_size + craft_padding)
+            slot_rect = pygame.Rect(panel_x + 5, slot_y, craft_slot_size, craft_slot_size)
             
             # Highlight if hovered
             if i == self.hovered_craft:
@@ -1178,6 +1213,24 @@ class Inventory:
             ingredient_text = ingredient_text.rstrip(", ")
             ing_surface = font.render(ingredient_text, True, (180, 180, 180))
             surface.blit(ing_surface, (slot_rect.right + 5, slot_rect.y + 20))
+        
+        surface.set_clip(None)  # Remove clipping
+        
+        # Draw scroll slider if needed
+        if total_items > self.craft_max_visible:
+            slider_x = panel_x + panel_width - 15
+            slider_y = panel_y + 30
+            slider_width = 10
+            slider_height = panel_height - 35
+            
+            # Slider background
+            pygame.draw.rect(surface, (50, 50, 60), (slider_x, slider_y, slider_width, slider_height))
+            
+            # Slider thumb
+            thumb_height = max(20, slider_height * self.craft_max_visible // total_items)
+            thumb_pos = slider_y + (slider_height - thumb_height) * self.craft_scroll // max(1, total_items - self.craft_max_visible)
+            pygame.draw.rect(surface, (120, 120, 140), (slider_x, thumb_pos, slider_width, thumb_height))
+            pygame.draw.rect(surface, (150, 150, 170), (slider_x, thumb_pos, slider_width, thumb_height), 1)
         
         # Show "No recipes" if nothing craftable
         if not self.craftable_items:

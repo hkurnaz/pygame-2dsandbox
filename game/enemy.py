@@ -3,6 +3,7 @@
 import pygame
 import math
 import random
+import heapq
 from game.constants import (
     ZOMBIE_WIDTH, ZOMBIE_HEIGHT, ZOMBIE_SPEED, ZOMBIE_HEALTH,
     ZOMBIE_DAMAGE, TILE_SIZE, GRAVITY, MAX_FALL_SPEED,
@@ -12,6 +13,178 @@ from game.constants import (
     EYE_SPAWN_INTERVAL, EYE_MAX_COUNT
 )
 from game.blocks import is_block_solid, BlockType
+
+
+class PathNode:
+    """Node for A* pathfinding."""
+    __slots__ = ['x', 'y', 'g', 'h', 'f', 'parent']
+    
+    def __init__(self, x, y, g=0, h=0, parent=None):
+        self.x = x
+        self.y = y
+        self.g = g  # Cost from start
+        self.h = h  # Heuristic (estimated cost to goal)
+        self.f = g + h  # Total cost
+        self.parent = parent
+    
+    def __lt__(self, other):
+        return self.f < other.f
+    
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
+    
+    def __hash__(self):
+        return hash((self.x, self.y))
+
+
+def heuristic(a_x, a_y, b_x, b_y):
+    """Octile distance heuristic for grid movement (allows diagonals)."""
+    dx = abs(a_x - b_x)
+    dy = abs(a_y - b_y)
+    return max(dx, dy) + (math.sqrt(2) - 1) * min(dx, dy)
+
+
+def is_tile_passable(world, tx, ty, require_clearance=False):
+    """Check if a tile is passable for flying enemies.
+    
+    Args:
+        world: The game world
+        tx, ty: Tile coordinates
+        require_clearance: If True, also check that the tile below is passable
+                          (for flying enemies that are taller than 1 tile)
+    """
+    if not (0 <= tx < world.width and 0 <= ty < world.height):
+        return False
+    bt = world.get_block(tx, ty)
+    # Flying enemies can pass through air, wood, and leaves
+    passable = bt in (BlockType.WOOD, BlockType.LEAVES, BlockType.AIR)
+    
+    if passable and require_clearance:
+        # Check tile below - the eye is 1.5 tiles tall, so it needs clearance below
+        ty_below = ty + 1
+        if 0 <= ty_below < world.height:
+            bt_below = world.get_block(tx, ty_below)
+            # Tile below must also be passable (or we adjust position later)
+            passable = bt_below in (BlockType.WOOD, BlockType.LEAVES, BlockType.AIR)
+    
+    return passable
+
+
+def find_path_astar(world, start_x, start_y, goal_x, goal_y, max_search_distance=50):
+    """
+    Find a path using A* algorithm.
+    
+    Args:
+        world: The game world
+        start_x, start_y: Starting tile coordinates
+        goal_x, goal_y: Goal tile coordinates
+        max_search_distance: Maximum search radius to limit computation
+    
+    Returns:
+        List of (x, y) tile coordinates representing the path, or None if no path found
+    """
+    # Limit search to a reasonable area around start and goal for performance
+    min_x = max(0, min(start_x, goal_x) - max_search_distance)
+    max_x = min(world.width - 1, max(start_x, goal_x) + max_search_distance)
+    min_y = max(0, min(start_y, goal_y) - max_search_distance)
+    max_y = min(world.height - 1, max(start_y, goal_y) + max_search_distance)
+    
+    # Check if goal is passable
+    if not is_tile_passable(world, goal_x, goal_y):
+        # Try to find nearby passable tile
+        found = False
+        for radius in range(1, 5):
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    if abs(dx) + abs(dy) == radius:
+                        check_x, check_y = goal_x + dx, goal_y + dy
+                        if is_tile_passable(world, check_x, check_y):
+                            goal_x, goal_y = check_x, check_y
+                            found = True
+                            break
+                if found:
+                    break
+            if found:
+                break
+        if not found:
+            return None
+    
+    start_node = PathNode(start_x, start_y, g=0, h=heuristic(start_x, start_y, goal_x, goal_y))
+    goal_node = PathNode(goal_x, goal_y)
+    
+    open_set = []
+    heapq.heappush(open_set, start_node)
+    open_set_lookup = {(start_x, start_y): start_node}
+    closed_set = set()
+    
+    # 8-directional movement (including diagonals)
+    # Cost: 1 for cardinal, sqrt(2) for diagonal
+    directions = [
+        (0, -1, 1.0), (0, 1, 1.0), (-1, 0, 1.0), (1, 0, 1.0),  # Cardinal
+        (-1, -1, 1.414), (1, -1, 1.414), (-1, 1, 1.414), (1, 1, 1.414)  # Diagonal
+    ]
+    
+    nodes_examined = 0
+    max_nodes = 2000  # Limit search to prevent lag spikes
+    
+    while open_set and nodes_examined < max_nodes:
+        current = heapq.heappop(open_set)
+        del open_set_lookup[(current.x, current.y)]
+        
+        if (current.x, current.y) == (goal_x, goal_y):
+            # Reconstruct path
+            path = []
+            node = current
+            while node:
+                path.append((node.x, node.y))
+                node = node.parent
+            return path[::-1]  # Reverse to get start -> goal
+        
+        closed_set.add((current.x, current.y))
+        nodes_examined += 1
+        
+        for dx, dy, move_cost in directions:
+            neighbor_x = current.x + dx
+            neighbor_y = current.y + dy
+            
+            # Bounds check
+            if not (min_x <= neighbor_x <= max_x and min_y <= neighbor_y <= max_y):
+                continue
+            
+            # Skip if already evaluated
+            if (neighbor_x, neighbor_y) in closed_set:
+                continue
+            
+            # Check passability
+            if not is_tile_passable(world, neighbor_x, neighbor_y):
+                continue
+            
+            # For diagonal movement, check that we don't cut corners
+            if dx != 0 and dy != 0:
+                if not (is_tile_passable(world, current.x + dx, current.y) or 
+                        is_tile_passable(world, current.x, current.y + dy)):
+                    continue
+            
+            g_score = current.g + move_cost
+            
+            if (neighbor_x, neighbor_y) in open_set_lookup:
+                neighbor = open_set_lookup[(neighbor_x, neighbor_y)]
+                if g_score < neighbor.g:
+                    neighbor.g = g_score
+                    neighbor.f = g_score + neighbor.h
+                    neighbor.parent = current
+                    # Re-heapify (remove and re-add)
+                    open_set.remove(neighbor)
+                    heapq.heapify(open_set)
+                    heapq.heappush(open_set, neighbor)
+            else:
+                h_score = heuristic(neighbor_x, neighbor_y, goal_x, goal_y)
+                neighbor = PathNode(neighbor_x, neighbor_y, g_score, h_score, current)
+                open_set_lookup[(neighbor_x, neighbor_y)] = neighbor
+                heapq.heappush(open_set, neighbor)
+    
+    # No path found within limits
+    return None
 
 
 class Zombie:
@@ -320,8 +493,12 @@ class Zombie:
 
 
 class FlyingEye:
-    """A flying eye enemy that floats and chases the player at night."""
+    """A flying eye enemy that floats and chases the player at night using A* pathfinding."""
 
+    # Class-level path cache to share paths between eyes when targeting same area
+    _path_cache = {}
+    _cache_clear_timer = 0.0
+    
     def __init__(self, x, y):
         self.x = float(x)
         self.y = float(y)
@@ -340,11 +517,25 @@ class FlyingEye:
         # Nerve/tail segments (relative positions)
         self.tail_segments = [(0, 0) for _ in range(5)]
         self.tail_wave = 0.0
-        # Pathfinding - track if stuck
+        
+        # A* Pathfinding system
+        self.path = []  # List of (x, y) tile waypoints
+        self.current_waypoint_index = 0  # Index of current waypoint in path
+        self.path_recalculation_timer = 0.0  # Time until next path recalculation
+        self.path_recalculation_interval = 0.5  # Recalculate path every 0.5 seconds
         self.stuck_timer = 0.0
         self.last_x = x
         self.last_y = y
-        self.avoidance_direction = 0  # -1 = up, 1 = down
+        self.waypoint_reached_distance = TILE_SIZE * 0.5  # Distance to consider waypoint reached
+        self.pathfinding_fail_count = 0  # Track consecutive failures
+        
+        # Smooth steering
+        self.target_x = None  # Current target position (world coords)
+        self.target_y = None
+        self.steering_force_x = 0.0
+        self.steering_force_y = 0.0
+        self.max_force = 0.5  # Maximum steering force
+        self.arrival_distance = TILE_SIZE * 3  # Distance to start slowing down
 
     @property
     def rect(self):
@@ -435,8 +626,195 @@ class FlyingEye:
         
         return (obstacle_height, clear_above, height_needed)
 
+    def _get_path_cache_key(self, start_tile, goal_tile):
+        """Generate a cache key for path lookup."""
+        # Round positions to reduce cache fragmentation
+        return (start_tile[0] // 3, start_tile[1] // 3, goal_tile[0] // 3, goal_tile[1] // 3)
+    
+    def _request_path(self, world, start_tile, goal_tile):
+        """Request a path, using cache if available."""
+        cache_key = self._get_path_cache_key(start_tile, goal_tile)
+        
+        # Check cache
+        if cache_key in FlyingEye._path_cache:
+            cached_path, timestamp = FlyingEye._path_cache[cache_key]
+            # Cache valid for 2 seconds
+            if pygame.time.get_ticks() - timestamp < 2000:
+                return cached_path
+        
+        # Calculate new path with dynamic search distance based on target distance
+        target_dist = abs(goal_tile[0] - start_tile[0]) + abs(goal_tile[1] - start_tile[1])
+        search_dist = max(80, min(target_dist + 20, 150))  # 80-150 tile search radius
+        path = find_path_astar(world, start_tile[0], start_tile[1], 
+                               goal_tile[0], goal_tile[1], max_search_distance=search_dist)
+        
+        if path:
+            FlyingEye._path_cache[cache_key] = (path, pygame.time.get_ticks())
+        
+        return path
+    
+    def _smooth_path(self, world, path):
+        """Simplify path by removing unnecessary waypoints using line-of-sight checks."""
+        if len(path) <= 2:
+            return path
+        
+        smoothed = [path[0]]  # Always keep start
+        i = 0
+        
+        while i < len(path) - 1:
+            # Try to skip ahead as far as possible
+            furthest = i + 1
+            for j in range(min(i + 5, len(path) - 1), i, -1):
+                if self._has_line_of_sight(world, path[i], path[j]):
+                    furthest = j
+                    break
+            smoothed.append(path[furthest])
+            i = furthest
+        
+        return smoothed
+    
+    def _has_line_of_sight(self, world, start, end):
+        """Check if there's a clear line of sight between two tile coordinates."""
+        x0, y0 = start
+        x1, y1 = end
+        
+        # Bresenham's line algorithm to check tiles
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+        
+        x, y = x0, y0
+        steps = 0
+        max_steps = max(dx, dy) + 1
+        
+        while steps < max_steps:
+            if not is_tile_passable(world, x, y):
+                return False
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+            steps += 1
+        
+        return True
+    
+    def _get_current_waypoint(self, world=None):
+        """Get the current waypoint world coordinates, adjusted for eye height.
+        
+        The eye is 1.5 tiles tall, so if the waypoint is in AIR above solid ground,
+        we need to position the eye so its body doesn't overlap solid tiles below.
+        """
+        if not self.path or self.current_waypoint_index >= len(self.path):
+            return None
+        
+        tile_x, tile_y = self.path[self.current_waypoint_index]
+        
+        # Check if this tile is passable and if the tile below is solid
+        # If so, we need to position the eye higher so it doesn't clip into ground
+        if world is not None:
+            # Check if tile below is solid (not passable for flying)
+            tile_below_y = tile_y + 1
+            if (0 <= tile_below_y < world.height and 
+                not is_tile_passable(world, tile_x, tile_below_y)):
+                # Tile below is solid - position eye so its bottom is above the solid tile
+                # Eye center should be at least EYE_HEIGHT/2 above the solid tile's top
+                solid_tile_top = tile_below_y * TILE_SIZE
+                eye_center_y = solid_tile_top - (EYE_HEIGHT / 2) - 2  # Small margin
+                return (tile_x * TILE_SIZE + TILE_SIZE / 2, eye_center_y)
+        
+        # Default: center of tile
+        return (tile_x * TILE_SIZE + TILE_SIZE / 2, 
+                tile_y * TILE_SIZE + TILE_SIZE / 2)
+    
+    def _advance_waypoint(self):
+        """Move to next waypoint."""
+        self.current_waypoint_index += 1
+        if self.current_waypoint_index >= len(self.path):
+            self.path = []
+            self.current_waypoint_index = 0
+    
+    def _raycast_obstacle(self, world, direction_x, direction_y, max_distance=64):
+        """Cast a ray in the given direction to detect obstacles.
+        
+        Returns (obstacle_detected, obstacle_distance, obstacle_tile) or (False, max_distance, None).
+        Only checks non-passable tiles (AIR/WOOD/LEAVES are passable).
+        """
+        my_center_x = self.x + self.width / 2
+        my_center_y = self.y + self.height / 2
+        
+        # Normalize direction
+        mag = math.sqrt(direction_x**2 + direction_y**2)
+        if mag == 0:
+            return (False, max_distance, None)
+        
+        dx = direction_x / mag
+        dy = direction_y / mag
+        
+        # Step along the ray
+        step_size = TILE_SIZE / 4  # Check every 8 pixels
+        current_dist = 0
+        
+        while current_dist < max_distance:
+            check_x = my_center_x + dx * current_dist
+            check_y = my_center_y + dy * current_dist
+            
+            tile_x = int(check_x // TILE_SIZE)
+            tile_y = int(check_y // TILE_SIZE)
+            
+            if 0 <= tile_x < world.width and 0 <= tile_y < world.height:
+                if not is_tile_passable(world, tile_x, tile_y):
+                    return (True, current_dist, (tile_x, tile_y))
+            
+            current_dist += step_size
+        
+        return (False, max_distance, None)
+    
+    def _apply_obstacle_avoidance(self, world, desired_vx, desired_vy):
+        """Apply steering to avoid obstacles using raycasting.
+        
+        Returns adjusted (vx, vy) that avoids obstacles.
+        """
+        # Only apply if we have some desired movement
+        if desired_vx == 0 and desired_vy == 0:
+            return (0, 0)
+        
+        # Cast rays in movement direction
+        obstacle_detected, dist, tile = self._raycast_obstacle(world, desired_vx, desired_vy, max_distance=48)
+        
+        if obstacle_detected and dist < 32:
+            # Obstacle ahead - apply avoidance steering
+            # Calculate perpendicular avoidance direction
+            mag = math.sqrt(desired_vx**2 + desired_vy**2)
+            if mag > 0:
+                # Perpendicular left
+                avoid_x = -desired_vy / mag
+                avoid_y = desired_vx / mag
+                
+                # Blend avoidance into desired direction
+                avoidance_strength = (32 - dist) / 32  # Stronger as we get closer
+                
+                adjusted_vx = desired_vx * 0.3 + avoid_x * EYE_SPEED * avoidance_strength
+                adjusted_vy = desired_vy * 0.3 + avoid_y * EYE_SPEED * avoidance_strength
+                
+                return (adjusted_vx, adjusted_vy)
+        
+        return (desired_vx, desired_vy)
+    
     def update(self, dt, world, player_rect, is_night=True):
-        """Update flying eye physics and AI."""
+        """Update flying eye physics and AI using A* pathfinding."""
+        # Update class-level cache clear timer
+        FlyingEye._cache_clear_timer += dt
+        if FlyingEye._cache_clear_timer > 5.0:  # Clear cache every 5 seconds
+            FlyingEye._path_cache.clear()
+            FlyingEye._cache_clear_timer = 0.0
+        
         # Update timers
         if self.hit_flash > 0:
             self.hit_flash -= dt
@@ -444,6 +822,9 @@ class FlyingEye:
             self.attack_cooldown -= dt
         if self.knockback_timer > 0:
             self.knockback_timer -= dt
+        
+        # Update path recalculation timer
+        self.path_recalculation_timer -= dt
 
         # Animations
         self.float_animation += dt * 3
@@ -455,10 +836,11 @@ class FlyingEye:
         self.last_x = self.x
         self.last_y = self.y
         
-        if moved_distance < 1.0:
+        if moved_distance < 0.5:
             self.stuck_timer += dt
         else:
             self.stuck_timer = 0
+            self.pathfinding_fail_count = 0  # Reset on successful movement
 
         # AI: During day, run away from player; at night, chase player
         if self.knockback_timer <= 0:
@@ -472,91 +854,132 @@ class FlyingEye:
             dy = player_center_y - my_center_y
             distance = math.sqrt(dx * dx + dy * dy)
             
+            # Determine flee direction (away from player during day, toward at night)
+            if is_night:
+                # Night: move TOWARD player
+                move_dx = dx
+                move_dy = dy
+            else:
+                # Day: move AWAY from player (flee)
+                move_dx = -dx
+                move_dy = -dy
+            
             if distance > 10:
-                # During daytime: run AWAY from player
-                if not is_night:
-                    dx = -dx
-                    dy = -dy
-                
-                # Normalize and apply speed
-                target_vx = (dx / distance) * EYE_SPEED
-                target_vy = (dy / distance) * EYE_SPEED
-                
-                # Direction we want to move horizontally
-                h_dir = 1 if dx > 0 else -1
-                
-                # Check if path ahead is clear at current level and above
-                path_clear_at_level = self._check_path_clear(world, h_dir, 0, distance_tiles=4)
-                path_clear_above = self._check_path_clear(world, h_dir, -1, distance_tiles=4)
-                path_clear_2above = self._check_path_clear(world, h_dir, -2, distance_tiles=4)
-                path_clear_3above = self._check_path_clear(world, h_dir, -3, distance_tiles=4)
-                
-                # If stuck or blocked, navigate properly over obstacles
-                if self.stuck_timer > 0.3 or not path_clear_at_level:
-                    # Find obstacle info
-                    obstacle_height, clear_above, height_needed = self._find_obstacle_height(world, h_dir)
-                    
-                    # Check if we can go up
-                    can_go_up = self._check_path_clear(world, 0, -1, distance_tiles=3)
-                    
-                    # Navigation strategy:
-                    # We need to fly UP and OVER the obstacle
-                    # Key insight: always move horizontally while climbing, don't stop
-                    
-                    if clear_above:
-                        # There's clear space above the wall - we can go over
-                        # Calculate how many tiles up we need to be to clear
-                        # height_needed is negative when we need to go UP
-                        tiles_to_climb = -height_needed if height_needed < 0 else 0
-                        
-                        if tiles_to_climb > 0 or not path_clear_3above:
-                            # We need to climb AND move forward simultaneously
-                            # Move up strongly while still moving horizontally
-                            target_vy = -EYE_SPEED * 1.5  # Strong upward
-                            target_vx = (dx / distance) * EYE_SPEED * 0.6  # Reduced but still moving forward
-                            self.avoidance_direction = -1
-                        elif not path_clear_at_level and path_clear_above:
-                            # We're at wall level, climb one tile
-                            target_vy = -EYE_SPEED * 1.5
-                            target_vx = (dx / distance) * EYE_SPEED * 0.5
-                            self.avoidance_direction = -1
-                        elif not path_clear_above and path_clear_2above:
-                            # Need to climb 2 tiles
-                            target_vy = -EYE_SPEED * 1.5
-                            target_vx = (dx / distance) * EYE_SPEED * 0.5
-                            self.avoidance_direction = -1
-                        else:
-                            # We should be clear now - fly forward
-                            target_vy = 0
-                            target_vx = (dx / distance) * EYE_SPEED * 1.1
-                            self.avoidance_direction = 0
-                    elif can_go_up:
-                        # Try going up to find a route
-                        target_vy = -EYE_SPEED * 1.5
-                        target_vx = (dx / distance) * EYE_SPEED * 0.4
-                        self.avoidance_direction = -1
-                    else:
-                        # Try going down
-                        can_go_down = self._check_path_clear(world, 0, 1, distance_tiles=3)
-                        if can_go_down:
-                            target_vy = EYE_SPEED * 1.3
-                            target_vx *= 0.5
-                            self.avoidance_direction = 1
-                        else:
-                            # Back up slightly
-                            target_vx *= -0.3
-                            target_vy = (dy / distance) * EYE_SPEED * 0.5
+                # Determine target position - flee point or chase point
+                if is_night:
+                    target_x = player_center_x
+                    target_y = player_center_y
                 else:
-                    # Clear path, reset avoidance
-                    self.avoidance_direction = 0
+                    # Flee target: extend in direction away from player
+                    target_x = my_center_x + move_dx * 3  # Target 3x distance away
+                    target_y = my_center_y + move_dy * 3
                 
-                self.vx = target_vx
-                self.vy = target_vy
-                self.facing_right = dx > 0
+                # Convert to tile coordinates
+                my_tile_x = int(my_center_x // TILE_SIZE)
+                my_tile_y = int(my_center_y // TILE_SIZE)
+                target_tile_x = int(target_x // TILE_SIZE)
+                target_tile_y = int(target_y // TILE_SIZE)
+                
+                # Check if we need to recalculate path
+                need_new_path = (
+                    not self.path or  # No path
+                    self.current_waypoint_index >= len(self.path) or  # Reached end
+                    self.stuck_timer > 0.5 or  # Stuck
+                    self.path_recalculation_timer <= 0  # Time to refresh
+                )
+                
+                if need_new_path and self.pathfinding_fail_count < 3:
+                    # Request new path
+                    new_path = self._request_path(
+                        world, 
+                        (my_tile_x, my_tile_y), 
+                        (target_tile_x, target_tile_y)
+                    )
+                    
+                    if new_path and len(new_path) > 1:
+                        self.path = self._smooth_path(world, new_path)
+                        self.current_waypoint_index = 1  # Start at index 1 (skip start tile)
+                        self.path_recalculation_timer = self.path_recalculation_interval
+                        self.pathfinding_fail_count = 0
+                    else:
+                        self.pathfinding_fail_count += 1
+                        self.path_recalculation_timer = 0.2  # Retry sooner on failure
+                
+                # Follow the path
+                if self.path and self.current_waypoint_index < len(self.path):
+                    waypoint = self._get_current_waypoint(world)
+                    
+                    if waypoint:
+                        wx, wy = waypoint
+                        wdx = wx - my_center_x
+                        wdy = wy - my_center_y
+                        wdist = math.sqrt(wdx * wdx + wdy * wdy)
+                        
+                        # Check if waypoint reached
+                        if wdist < self.waypoint_reached_distance:
+                            self._advance_waypoint()
+                            if self.current_waypoint_index < len(self.path):
+                                waypoint = self._get_current_waypoint(world)
+                                if waypoint:
+                                    wx, wy = waypoint
+                                    wdx = wx - my_center_x
+                                    wdy = wy - my_center_y
+                                    wdist = math.sqrt(wdx * wdx + wdy * wdy)
+                        
+                        if wdist > 0:
+                            # Steering behavior with arrival slowing
+                            if wdist < self.arrival_distance and self.current_waypoint_index >= len(self.path) - 1:
+                                # Arrival behavior - slow down near final target
+                                speed_factor = wdist / self.arrival_distance
+                                desired_vx = (wdx / wdist) * EYE_SPEED * speed_factor
+                                desired_vy = (wdy / wdist) * EYE_SPEED * speed_factor
+                            else:
+                                # Normal movement
+                                desired_vx = (wdx / wdist) * EYE_SPEED
+                                desired_vy = (wdy / wdist) * EYE_SPEED
+                            
+                            # Apply raycast-based obstacle avoidance
+                            desired_vx, desired_vy = self._apply_obstacle_avoidance(world, desired_vx, desired_vy)
+                            
+                            # Smooth steering
+                            self.steering_force_x = desired_vx - self.vx
+                            self.steering_force_y = desired_vy - self.vy
+                            
+                            # Clamp steering force
+                            steer_mag = math.sqrt(self.steering_force_x**2 + self.steering_force_y**2)
+                            if steer_mag > self.max_force:
+                                self.steering_force_x = (self.steering_force_x / steer_mag) * self.max_force
+                                self.steering_force_y = (self.steering_force_y / steer_mag) * self.max_force
+                            
+                            # Apply steering
+                            self.vx += self.steering_force_x
+                            self.vy += self.steering_force_y
+                            
+                            # Clamp velocity
+                            vel_mag = math.sqrt(self.vx**2 + self.vy**2)
+                            if vel_mag > EYE_SPEED * 1.2:
+                                self.vx = (self.vx / vel_mag) * EYE_SPEED * 1.2
+                                self.vy = (self.vy / vel_mag) * EYE_SPEED * 1.2
+                            
+                            self.facing_right = self.vx > 0
+                        else:
+                            self._advance_waypoint()
+                else:
+                    # Fallback: direct movement when no path available
+                    # STILL apply obstacle avoidance even in fallback!
+                    if distance > 0:
+                        # Use move_dx/move_dy which is already correctly oriented (flee or chase)
+                        desired_vx = (move_dx / distance) * EYE_SPEED
+                        desired_vy = (move_dy / distance) * EYE_SPEED
+                        desired_vx, desired_vy = self._apply_obstacle_avoidance(world, desired_vx, desired_vy)
+                        self.vx = desired_vx
+                        self.vy = desired_vy
+                        self.facing_right = self.vx > 0
             else:
                 self.vx = 0
                 self.vy = 0
                 self.stuck_timer = 0
+                self.path = []
 
         # Apply friction when knockback is active
         if self.knockback_timer > 0:
